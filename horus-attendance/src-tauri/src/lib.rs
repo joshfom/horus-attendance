@@ -314,6 +314,30 @@ async fn write_binary_file(path: String, base64_data: String) -> Result<(), Stri
         .map_err(|e| format!("Failed to write file: {}", e))
 }
 
+/// Proxy a POST request to the sidecar (bypasses webview HTTP restrictions)
+#[tauri::command]
+async fn sidecar_request(endpoint: String, body: String) -> Result<String, String> {
+    let url = format!("http://127.0.0.1:3847{}", endpoint);
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Sidecar request failed: {}. Is the sidecar running on port 3847?", e))?;
+    let status = response.status();
+    let text = response.text().await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+    if !status.is_success() {
+        return Err(format!("Sidecar error ({}): {}", status, text));
+    }
+    Ok(text)
+}
+
 /// Simple base64 decoder
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
     let chars: Vec<u8> = input.bytes().collect();
@@ -368,6 +392,7 @@ pub fn run() {
             reset_database,
             write_text_file,
             write_binary_file,
+            sidecar_request,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
