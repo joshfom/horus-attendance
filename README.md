@@ -11,9 +11,18 @@ Get the latest release for your platform:
 | Platform | File |
 |----------|------|
 | macOS (Apple Silicon) | `.dmg` |
-| macOS (Intel) | `.dmg` |
 | Windows | `.msi` |
 | Linux | `.deb` / `.AppImage` |
+
+### macOS — First Launch
+
+The app is not code-signed with an Apple Developer certificate, so macOS Gatekeeper will block it. After installing, open Terminal and run:
+
+```bash
+xattr -cr /Applications/Horus\ Attendance.app
+```
+
+Then open the app normally.
 
 ## Features
 

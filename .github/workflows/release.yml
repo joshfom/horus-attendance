@@ -22,9 +22,6 @@ jobs:
           - platform: macos-latest
             target: aarch64-apple-darwin
             label: macOS-arm64
-          - platform: macos-latest
-            target: x86_64-apple-darwin
-            label: macOS-x64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             label: Windows-x64
@@ -89,10 +86,15 @@ jobs:
             ## Horus Attendance ${{ github.ref_name }}
 
             ### Downloads
-            - **macOS (Apple Silicon)**: `.dmg` file for M1/M2/M3 Macs
-            - **macOS (Intel)**: `.dmg` file for Intel Macs
+            - **macOS (Apple Silicon)**: `.dmg` for M1/M2/M3+ Macs
             - **Windows**: `.msi` installer
             - **Linux**: `.deb` / `.AppImage`
+
+            ### macOS — First Launch
+            The app is not code-signed. After installing, run in Terminal:
+            ```
+            xattr -cr /Applications/Horus\ Attendance.app
+            ```
 
             ### Sidecar
             The ZKTeco sidecar must be run separately. See the README for instructions.
