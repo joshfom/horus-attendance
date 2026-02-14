@@ -1,0 +1,100 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.1.0)'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS-arm64
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            label: macOS-x64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows-x64
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: Linux-x64
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: horus-attendance/package-lock.json
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: horus-attendance/src-tauri -> target
+
+      # Linux dependencies for Tauri
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      # Build sidecar
+      - name: Install sidecar dependencies
+        run: npm ci
+        working-directory: horus-attendance/sidecar
+
+      - name: Build sidecar
+        run: npm run build
+        working-directory: horus-attendance/sidecar
+
+      # Build frontend + Tauri app
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: horus-attendance
+
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: horus-attendance
+          tauriScript: npx tauri
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Horus Attendance ${{ github.ref_name }}'
+          releaseBody: |
+            ## Horus Attendance ${{ github.ref_name }}
+
+            ### Downloads
+            - **macOS (Apple Silicon)**: `.dmg` file for M1/M2/M3 Macs
+            - **macOS (Intel)**: `.dmg` file for Intel Macs
+            - **Windows**: `.msi` installer
+            - **Linux**: `.deb` / `.AppImage`
+
+            ### Sidecar
+            The ZKTeco sidecar must be run separately. See the README for instructions.
+          releaseDraft: true
+          prerelease: false
