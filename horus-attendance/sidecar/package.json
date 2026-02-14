@@ -1,6 +1,6 @@
 {
   "name": "horus-zkteco-sidecar",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Node.js sidecar for ZKTeco device communication",
   "type": "module",
   "main": "dist/index.js",

@@ -249,7 +249,7 @@ async function handleRequest(
 // Create and start server
 const server = http.createServer(handleRequest);
 
-server.listen(PORT, () => {
+server.listen(PORT, '127.0.0.1', () => {
   console.log(`[sidecar] ZKTeco sidecar HTTP server running on port ${PORT}`);
   console.log(`[sidecar] Endpoints:`);
   console.log(`  POST /test-connection - Test device connection`);

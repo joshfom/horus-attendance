@@ -66,7 +66,7 @@ function toSidecarConfig(config: DeviceConfig): SidecarDeviceConfig {
 export class SidecarClient {
   private static instance: SidecarClient | null = null;
   private isConnected = false;
-  private sidecarUrl = 'http://localhost:3847'; // Sidecar HTTP server port
+  private sidecarUrl = 'http://127.0.0.1:3847'; // Sidecar HTTP server port
 
   private constructor() {}
 
