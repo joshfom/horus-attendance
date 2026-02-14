@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+target/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Tauri
+horus-attendance/src-tauri/target/
+horus-attendance/src-tauri/gen/schemas/
+
+# Sidecar build
+horus-attendance/sidecar/dist/
+
+# Generated
+*.d.ts.map
+horus-attendance/vite.config.d.ts
