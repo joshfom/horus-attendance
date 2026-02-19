@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AppProvider, useApp } from './contexts';
 import { AppShell } from './components/layout';
-import { Notification, LoadingScreen, ErrorScreen } from './components';
+import { Notification, LoadingScreen, ErrorScreen, ErrorBoundary } from './components';
 import {
   DashboardPage,
   SyncPage,
@@ -11,6 +11,7 @@ import {
   ReportsPage,
   DepartmentsPage,
   SettingsPage,
+  NotFoundPage,
 } from './pages';
 
 function AppContent() {
@@ -42,6 +43,7 @@ function AppContent() {
             <Route path="reports" element={<ReportsPage />} />
             <Route path="departments" element={<DepartmentsPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="*" element={<NotFoundPage />} />
           </Route>
         </Routes>
       </BrowserRouter>
@@ -51,9 +53,11 @@ function AppContent() {
 
 function App() {
   return (
-    <AppProvider>
-      <AppContent />
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <AppContent />
+      </AppProvider>
+    </ErrorBoundary>
   );
 }
 

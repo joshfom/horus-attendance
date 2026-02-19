@@ -12,6 +12,8 @@ export async function initDatabase(): Promise<Database> {
   }
   
   db = await Database.load('sqlite:horus_attendance.db');
+  // Enable foreign key enforcement (SQLite has it off by default)
+  await db.execute('PRAGMA foreign_keys = ON');
   return db;
 }
 

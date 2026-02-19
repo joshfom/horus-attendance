@@ -23,6 +23,8 @@ import {
   exportWeeklyReportToExcel, 
   exportMonthlyReportToExcel 
 } from '../lib/services/report-generator';
+import { useDebounce } from '../lib/hooks/useDebounce';
+import { useApp } from '../contexts';
 
 // Animation variants
 const containerVariants = {
@@ -591,6 +593,7 @@ function MultiSelectDropdown({ options, selected, onChange, placeholder = 'All E
 // Main Reports Page Component
 export function ReportsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { showNotification } = useApp();
   
   // State
   const [reportType, setReportType] = useState<ReportType>(
@@ -600,6 +603,7 @@ export function ReportsPage() {
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState(searchParams.get('departmentId') || '');
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const debouncedUserIds = useDebounce(selectedUserIds, 400);
   const [statusFilter, setStatusFilter] = useState<UserStatus | 'all'>('active');
   const [loading, setLoading] = useState(true);
   
@@ -641,6 +645,7 @@ export function ReportsPage() {
         setAllUsers(userList);
       } catch (error) {
         console.error('Failed to load filter data:', error);
+        showNotification('Failed to load filter data', 'error');
       }
     };
     loadFilterData();
@@ -671,7 +676,7 @@ export function ReportsPage() {
       const generator = createReportGenerator();
       const filter: { departmentId?: string; userIds?: string[] } = {};
       if (selectedDepartmentId) filter.departmentId = selectedDepartmentId;
-      if (selectedUserIds.length > 0) filter.userIds = selectedUserIds;
+      if (debouncedUserIds.length > 0) filter.userIds = debouncedUserIds;
       const report = await generator.generateWeeklyReport(selectedWeekStart, Object.keys(filter).length > 0 ? filter : undefined);
       setWeeklyReport(report);
       
@@ -686,10 +691,11 @@ export function ReportsPage() {
       setWeekDates(dates);
     } catch (error) {
       console.error('Failed to load weekly report:', error);
+      showNotification('Failed to load weekly report', 'error');
     } finally {
       setLoading(false);
     }
-  }, [selectedWeekStart, selectedDepartmentId, selectedUserIds, createReportGenerator]);
+  }, [selectedWeekStart, selectedDepartmentId, debouncedUserIds, createReportGenerator]);
 
   // Load monthly report
   const loadMonthlyReport = useCallback(async () => {
@@ -698,15 +704,16 @@ export function ReportsPage() {
       const generator = createReportGenerator();
       const filter: { departmentId?: string; userIds?: string[] } = {};
       if (selectedDepartmentId) filter.departmentId = selectedDepartmentId;
-      if (selectedUserIds.length > 0) filter.userIds = selectedUserIds;
+      if (debouncedUserIds.length > 0) filter.userIds = debouncedUserIds;
       const report = await generator.generateMonthlyReport(selectedYear, selectedMonth, Object.keys(filter).length > 0 ? filter : undefined);
       setMonthlyReport(report);
     } catch (error) {
       console.error('Failed to load monthly report:', error);
+      showNotification('Failed to load monthly report', 'error');
     } finally {
       setLoading(false);
     }
-  }, [selectedYear, selectedMonth, selectedDepartmentId, selectedUserIds, createReportGenerator]);
+  }, [selectedYear, selectedMonth, selectedDepartmentId, debouncedUserIds, createReportGenerator]);
 
   // Load report based on type
   useEffect(() => {
@@ -804,6 +811,7 @@ export function ReportsPage() {
       await invoke('write_binary_file', { path: filePath, base64Data: base64 });
     } catch (error) {
       console.error('Export failed:', error);
+      showNotification('Failed to export report', 'error');
     }
   };
 

@@ -6,3 +6,4 @@ export { UserAttendancePage } from './UserAttendancePage';
 export { ReportsPage } from './ReportsPage';
 export { DepartmentsPage } from './DepartmentsPage';
 export { SettingsPage } from './SettingsPage';
+export { NotFoundPage } from './NotFoundPage';

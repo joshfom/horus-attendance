@@ -5,6 +5,7 @@ import { settingsRepository } from '../lib/repositories/settings.repository';
 import { holidayRepository } from '../lib/repositories/holiday.repository';
 import { exportBackup, isTauriEnvironment, formatFileSize, resetDatabase } from '../lib/tauri-commands';
 import { useApp } from '../contexts';
+import { ConfirmDialog } from '../components/ui';
 
 // Animation variants
 const containerVariants = {
@@ -486,6 +487,7 @@ function BackupSection({ lastBackupAt, onExport, onImport, onReset }: BackupSect
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [confirmResetOpen, setConfirmResetOpen] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const handleExport = async () => {
@@ -515,9 +517,7 @@ function BackupSection({ lastBackupAt, onExport, onImport, onReset }: BackupSect
   };
 
   const handleReset = async () => {
-    if (!confirm('Are you sure you want to reset the database? This will delete ALL data. A backup will be created first.')) {
-      return;
-    }
+    setConfirmResetOpen(false);
     setResetting(true);
     setMessage(null);
     try {
@@ -590,7 +590,7 @@ function BackupSection({ lastBackupAt, onExport, onImport, onReset }: BackupSect
           <motion.button
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            onClick={handleReset}
+            onClick={() => setConfirmResetOpen(true)}
             disabled={resetting}
             className="bg-danger-600 hover:bg-danger-700 text-white font-medium py-2 px-4 rounded-lg transition-colors flex items-center gap-2"
           >
@@ -626,6 +626,16 @@ function BackupSection({ lastBackupAt, onExport, onImport, onReset }: BackupSect
           )}
         </AnimatePresence>
       </div>
+
+      <ConfirmDialog
+        open={confirmResetOpen}
+        title="Reset Database"
+        message="Are you sure you want to reset the database? This will delete ALL data. A backup will be created first."
+        confirmLabel="Reset Database"
+        variant="danger"
+        onConfirm={handleReset}
+        onCancel={() => setConfirmResetOpen(false)}
+      />
     </motion.div>
   );
 }

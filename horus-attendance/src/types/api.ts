@@ -104,13 +104,8 @@ export type AttendanceRecordSortField = 'timestamp' | 'user' | 'department';
 // Dashboard Statistics Types
 // ============================================================================
 
-export interface DashboardStats {
-  lastSyncAt: string | null;
-  totalActiveUsers: number;
-  todayCheckedIn: number;
-  todayNotCheckedIn: number;
-  todayOnLeave: number;
-}
+// DashboardStats is defined in src/lib/services/dashboard.ts
+// (uses nested TodayAttendanceStats object)
 
 // ============================================================================
 // Database Row Types (for SQLite queries)

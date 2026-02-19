@@ -3,6 +3,9 @@ use tauri::Manager;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use base64::Engine;
+
+mod zkteco;
 
 fn get_migrations() -> Vec<Migration> {
     vec![
@@ -190,6 +193,7 @@ async fn export_backup(app: tauri::AppHandle, destination: Option<String>) -> Re
 }
 
 /// Restore database from backup
+/// NOTE: After restore the app must be restarted for the SQL plugin to pick up the new file.
 #[tauri::command]
 async fn restore_backup(app: tauri::AppHandle, backup_path: String) -> Result<RestoreResult, String> {
     let source_path = PathBuf::from(&backup_path);
@@ -258,6 +262,7 @@ fn get_app_version() -> String {
 }
 
 /// Reset the database by deleting all data
+/// NOTE: After reset the app must be restarted for the SQL plugin to re-create a fresh DB.
 #[tauri::command]
 async fn reset_database(app: tauri::AppHandle) -> Result<RestoreResult, String> {
     let db_path = get_db_path(&app)?;
@@ -295,88 +300,81 @@ async fn reset_database(app: tauri::AppHandle) -> Result<RestoreResult, String> 
     })
 }
 
-/// Write text content to a file path
+/// Write text content to a file path (sandboxed to app data + documents)
 #[tauri::command]
-async fn write_text_file(path: String, content: String) -> Result<(), String> {
-    fs::write(&path, content)
+async fn write_text_file(app: tauri::AppHandle, path: String, content: String) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    let target = target.canonicalize().unwrap_or_else(|_| target.clone());
+
+    let app_data = app.path().app_data_dir()
+        .map_err(|e| format!("Cannot resolve app data dir: {}", e))?;
+    let documents = app.path().document_dir()
+        .map_err(|e| format!("Cannot resolve document dir: {}", e))?;
+    let downloads = app.path().download_dir().ok();
+
+    let allowed = target.starts_with(&app_data)
+        || target.starts_with(&documents)
+        || downloads.as_ref().map_or(false, |d| target.starts_with(d));
+
+    if !allowed {
+        return Err(format!(
+            "Write denied: path must be inside app data, documents, or downloads directory. Got: {}",
+            path
+        ));
+    }
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create parent directories: {}", e))?;
+    }
+
+    fs::write(&target, content)
         .map_err(|e| format!("Failed to write file: {}", e))
 }
 
-/// Write binary content (base64-encoded) to a file path
+/// Write binary content (base64-encoded) to a file path (sandboxed to app data + documents)
 #[tauri::command]
-async fn write_binary_file(path: String, base64_data: String) -> Result<(), String> {
+async fn write_binary_file(app: tauri::AppHandle, path: String, base64_data: String) -> Result<(), String> {
     use std::io::Write;
-    let bytes = base64_decode(&base64_data)
+
+    let target = PathBuf::from(&path);
+    let target = target.canonicalize().unwrap_or_else(|_| target.clone());
+
+    let app_data = app.path().app_data_dir()
+        .map_err(|e| format!("Cannot resolve app data dir: {}", e))?;
+    let documents = app.path().document_dir()
+        .map_err(|e| format!("Cannot resolve document dir: {}", e))?;
+    let downloads = app.path().download_dir().ok();
+
+    let allowed = target.starts_with(&app_data)
+        || target.starts_with(&documents)
+        || downloads.as_ref().map_or(false, |d| target.starts_with(d));
+
+    if !allowed {
+        return Err(format!(
+            "Write denied: path must be inside app data, documents, or downloads directory. Got: {}",
+            path
+        ));
+    }
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create parent directories: {}", e))?;
+    }
+
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&base64_data)
         .map_err(|e| format!("Failed to decode base64: {}", e))?;
-    let mut file = fs::File::create(&path)
+    let mut file = fs::File::create(&target)
         .map_err(|e| format!("Failed to create file: {}", e))?;
     file.write_all(&bytes)
         .map_err(|e| format!("Failed to write file: {}", e))
 }
 
-/// Proxy a POST request to the sidecar (bypasses webview HTTP restrictions)
-#[tauri::command]
-async fn sidecar_request(endpoint: String, body: String) -> Result<String, String> {
-    let url = format!("http://127.0.0.1:3847{}", endpoint);
-    let client = tauri_plugin_http::reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-    let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| format!("Sidecar request failed: {}. Is the sidecar running on port 3847?", e))?;
-    let status = response.status();
-    let text = response.text().await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
-    if !status.is_success() {
-        return Err(format!("Sidecar error ({}): {}", status, text));
-    }
-    Ok(text)
-}
 
-/// Simple base64 decoder
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    let chars: Vec<u8> = input.bytes().collect();
-    let mut output = Vec::with_capacity(input.len() * 3 / 4);
-    let table = |c: u8| -> Result<u8, String> {
-        match c {
-            b'A'..=b'Z' => Ok(c - b'A'),
-            b'a'..=b'z' => Ok(c - b'a' + 26),
-            b'0'..=b'9' => Ok(c - b'0' + 52),
-            b'+' => Ok(62),
-            b'/' => Ok(63),
-            b'=' => Ok(0),
-            _ => Err(format!("Invalid base64 character: {}", c as char)),
-        }
-    };
-    let mut i = 0;
-    while i < chars.len() {
-        if i + 3 >= chars.len() { break; }
-        let a = table(chars[i])?;
-        let b = table(chars[i + 1])?;
-        let c = table(chars[i + 2])?;
-        let d = table(chars[i + 3])?;
-        output.push((a << 2) | (b >> 4));
-        if chars[i + 2] != b'=' {
-            output.push((b << 4) | (c >> 2));
-        }
-        if chars[i + 3] != b'=' {
-            output.push((c << 6) | d);
-        }
-        i += 4;
-    }
-    Ok(output)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_http::init())
-        .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_sql::Builder::default()
@@ -392,16 +390,23 @@ pub fn run() {
             reset_database,
             write_text_file,
             write_binary_file,
-            sidecar_request,
+            zkteco::commands::test_device_connection,
+            zkteco::commands::get_device_info,
+            zkteco::commands::get_device_users,
+            zkteco::commands::get_attendance_logs,
+            zkteco::commands::sync_device_all,
         ])
         .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
-            }
+            // Enable logging in both debug and release builds
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(if cfg!(debug_assertions) {
+                        log::LevelFilter::Debug
+                    } else {
+                        log::LevelFilter::Info
+                    })
+                    .build(),
+            )?;
             Ok(())
         })
         .run(tauri::generate_context!())

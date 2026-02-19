@@ -1,9 +1,10 @@
 import { motion, AnimatePresence } from 'framer-motion';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import type { User, DailySummary, AttendanceStatus } from '../types/models';
 import { userRepository } from '../lib/repositories/user.repository';
 import { attendanceSummaryRepository } from '../lib/repositories/attendance-summary.repository';
+import { useApp } from '../contexts';
 
 // Helper function to format date to YYYY-MM-DD
 function formatDateString(date: Date): string {
@@ -175,6 +176,7 @@ export function UserAttendancePage() {
   const { userId } = useParams<{ userId: string }>();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { showNotification } = useApp();
   
   // Data state
   const [user, setUser] = useState<User | null>(null);
@@ -187,7 +189,7 @@ export function UserAttendancePage() {
   );
   
   // Date state
-  const today = new Date();
+  const today = useMemo(() => new Date(), []);
   const [selectedDate, setSelectedDate] = useState(() => {
     const dateParam = searchParams.get('date');
     return dateParam ? new Date(dateParam) : today;
@@ -204,6 +206,7 @@ export function UserAttendancePage() {
         setUser(userData);
       } catch (error) {
         console.error('Failed to load user:', error);
+        showNotification('Failed to load user data', 'error');
       }
     };
     loadUser();
@@ -265,6 +268,7 @@ export function UserAttendancePage() {
       setSearchParams(params, { replace: true });
     } catch (error) {
       console.error('Failed to load summaries:', error);
+      showNotification('Failed to load attendance summaries', 'error');
     } finally {
       setLoading(false);
     }

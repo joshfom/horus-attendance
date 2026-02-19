@@ -5,6 +5,7 @@ import type { User, Department, UpdateUserInput } from '../types/models';
 import { userRepository } from '../lib/repositories/user.repository';
 import { departmentRepository } from '../lib/repositories/department.repository';
 import { useApp } from '../contexts';
+import { useDebounce } from '../lib/hooks/useDebounce';
 
 // Animation variants
 const containerVariants = {
@@ -266,6 +267,7 @@ export function UsersPage() {
 
   // Filter state
   const [searchQuery, setSearchQuery] = useState('');
+  const debouncedSearch = useDebounce(searchQuery, 300);
   const [filterDepartment, setFilterDepartment] = useState('');
   const [filterStatus, setFilterStatus] = useState<'active' | 'inactive' | 'all'>('active');
   const [showUnlinkedOnly, setShowUnlinkedOnly] = useState(false);
@@ -278,7 +280,7 @@ export function UsersPage() {
         status: filterStatus,
         linkedOnly: false,
       };
-      if (searchQuery) filter.search = searchQuery;
+      if (debouncedSearch) filter.search = debouncedSearch;
       if (filterDepartment) filter.departmentId = filterDepartment;
       
       const [userList, deptList] = await Promise.all([
@@ -299,7 +301,7 @@ export function UsersPage() {
     } finally {
       setLoading(false);
     }
-  }, [searchQuery, filterDepartment, filterStatus, showUnlinkedOnly, showNotification]);
+  }, [debouncedSearch, filterDepartment, filterStatus, showUnlinkedOnly, showNotification]);
 
   useEffect(() => {
     loadData();

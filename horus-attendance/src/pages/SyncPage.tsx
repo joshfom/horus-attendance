@@ -5,6 +5,7 @@ import type { SyncOptions, SyncResult, SyncProgress } from '../types/services';
 import { listDevices, saveDevice, deleteDevice } from '../lib/repositories/device.repository';
 import { getSyncEngine } from '../lib/services/sync-engine';
 import { useApp } from '../contexts';
+import { ConfirmDialog } from '../components/ui';
 
 // Animation variants
 const containerVariants = {
@@ -426,6 +427,7 @@ export function SyncPage() {
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
 
   // Connection test state
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>({
@@ -469,6 +471,7 @@ export function SyncPage() {
       }
     } catch (error) {
       console.error('Failed to load devices:', error);
+      showNotification('Failed to load devices', 'error');
     } finally {
       setLoading(false);
     }
@@ -522,6 +525,7 @@ export function SyncPage() {
       selectDevice(saved);
     } catch (error) {
       console.error('Failed to save device:', error);
+      showNotification('Failed to save device', 'error');
     } finally {
       setSaving(false);
     }
@@ -529,13 +533,14 @@ export function SyncPage() {
 
   const handleDeleteDevice = async () => {
     if (!selectedDeviceId) return;
-    if (!confirm('Are you sure you want to delete this device?')) return;
+    setConfirmDeleteOpen(false);
     try {
       await deleteDevice(selectedDeviceId);
       await loadDevices();
       selectDevice(null);
     } catch (error) {
       console.error('Failed to delete device:', error);
+      showNotification('Failed to delete device', 'error');
     }
   };
 
@@ -687,7 +692,7 @@ export function SyncPage() {
             formData={formData}
             onChange={setFormData}
             onSave={handleSaveDevice}
-            onDelete={selectedDeviceId ? handleDeleteDevice : undefined}
+            onDelete={selectedDeviceId ? () => setConfirmDeleteOpen(true) : undefined}
             saving={saving}
             isEditing={!!selectedDeviceId}
             errors={formErrors}
@@ -819,6 +824,16 @@ export function SyncPage() {
           </motion.div>
         )}
       </motion.div>
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        title="Delete Device"
+        message="Are you sure you want to delete this device? This action cannot be undone."
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={handleDeleteDevice}
+        onCancel={() => setConfirmDeleteOpen(false)}
+      />
     </div>
   );
 }

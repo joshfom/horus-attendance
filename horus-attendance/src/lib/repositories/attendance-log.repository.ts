@@ -94,7 +94,8 @@ export async function insertLog(log: {
       [log.deviceId, log.deviceUserId, log.timestamp]
     );
     
-    return { inserted: false, id: (existingLog[0] as { id: string }).id };
+    const existingId = existingLog[0] ? (existingLog[0] as { id: string }).id : id;
+    return { inserted: false, id: existingId };
   } catch (error) {
     throw error;
   }
@@ -103,6 +104,7 @@ export async function insertLog(log: {
 
 /**
  * Bulk insert attendance logs with deduplication
+ * Uses a single transaction for performance (avoids 3 SQL round-trips per log)
  * Supports userName for user matching
  */
 export async function insertLogs(logs: Array<{
@@ -114,18 +116,62 @@ export async function insertLogs(logs: Array<{
   rawPayload?: string;
   userName?: string | null;
 }>): Promise<{ inserted: number; duplicates: number }> {
+  if (logs.length === 0) {
+    return { inserted: 0, duplicates: 0 };
+  }
+
+  // Wrap in a savepoint for performance (compatible with parent transactions)
+  await execute('SAVEPOINT insert_logs');
+
   let inserted = 0;
   let duplicates = 0;
-  
-  for (const log of logs) {
-    const result = await insertLog(log);
-    if (result.inserted) {
-      inserted++;
-    } else {
-      duplicates++;
+
+  try {
+    // Use batch size to avoid excessively large SQL statements
+    const BATCH_SIZE = 50;
+
+    for (let batchStart = 0; batchStart < logs.length; batchStart += BATCH_SIZE) {
+      const batch = logs.slice(batchStart, batchStart + BATCH_SIZE);
+
+      for (const log of batch) {
+        const id = generateId();
+        const createdAt = now();
+
+        let rawPayload = log.rawPayload ?? null;
+        if (log.userName) {
+          rawPayload = JSON.stringify({ userName: log.userName });
+        }
+
+        const result = await execute(
+          `INSERT OR IGNORE INTO attendance_logs_raw 
+           (id, device_id, device_user_id, timestamp, verify_type, punch_type, raw_payload, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            id,
+            log.deviceId,
+            log.deviceUserId,
+            log.timestamp,
+            log.verifyType ?? null,
+            log.punchType ?? null,
+            rawPayload,
+            createdAt,
+          ]
+        );
+
+        if (result.rowsAffected > 0) {
+          inserted++;
+        } else {
+          duplicates++;
+        }
+      }
     }
+
+    await execute('RELEASE SAVEPOINT insert_logs');
+  } catch (error) {
+    await execute('ROLLBACK TO SAVEPOINT insert_logs').catch(() => {});
+    throw error;
   }
-  
+
   return { inserted, duplicates };
 }
 

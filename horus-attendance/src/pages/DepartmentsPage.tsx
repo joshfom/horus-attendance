@@ -152,6 +152,7 @@ function DeleteModal({ department, members, onConfirm, onClose }: DeleteModalPro
       onClose();
     } catch (error) {
       console.error('Failed to delete department:', error);
+      onClose();
     } finally {
       setDeleting(false);
     }
@@ -330,9 +331,14 @@ export function DepartmentsPage() {
 
   const handleDelete = async () => {
     if (!deletingDepartment) return;
-    await departmentRepository.deleteDepartment(deletingDepartment.id);
-    await loadDepartments();
-    showNotification('Department deleted successfully', 'success');
+    try {
+      await departmentRepository.deleteDepartment(deletingDepartment.id);
+      await loadDepartments();
+      showNotification('Department deleted successfully', 'success');
+    } catch (error) {
+      console.error('Failed to delete department:', error);
+      showNotification('Failed to delete department', 'error');
+    }
   };
 
   const openDeleteModal = async (department: Department) => {

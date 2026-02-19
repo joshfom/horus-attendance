@@ -9,6 +9,7 @@ import { attendanceLogRepository } from '../lib/repositories/attendance-log.repo
 import { userRepository } from '../lib/repositories/user.repository';
 import { departmentRepository } from '../lib/repositories/department.repository';
 import { useApp } from '../contexts';
+import { useDebounce } from '../lib/hooks/useDebounce';
 
 // Animation variants
 const containerVariants = {
@@ -97,6 +98,8 @@ export function RecordsPage() {
   // Filter state
   const [dateFrom, setDateFrom] = useState(searchParams.get('dateFrom') || '');
   const [dateTo, setDateTo] = useState(searchParams.get('dateTo') || '');
+  const debouncedDateFrom = useDebounce(dateFrom, 300);
+  const debouncedDateTo = useDebounce(dateTo, 300);
   const [selectedUserId, setSelectedUserId] = useState(searchParams.get('userId') || '');
   const [selectedDepartmentId, setSelectedDepartmentId] = useState(searchParams.get('departmentId') || '');
   const [selectedPunchType, setSelectedPunchType] = useState(searchParams.get('punchType') || '');
@@ -141,6 +144,7 @@ export function RecordsPage() {
         setUserMap(map);
       } catch (error) {
         console.error('Failed to load filter data:', error);
+        showNotification('Failed to load filter data', 'error');
       }
     };
     loadFilterData();
@@ -152,8 +156,8 @@ export function RecordsPage() {
       setLoading(true);
       
       const filter: AttendanceRecordFilter = {};
-      if (dateFrom) filter.dateFrom = `${dateFrom}T00:00:00`;
-      if (dateTo) filter.dateTo = `${dateTo}T23:59:59`;
+      if (debouncedDateFrom) filter.dateFrom = `${debouncedDateFrom}T00:00:00`;
+      if (debouncedDateTo) filter.dateTo = `${debouncedDateTo}T23:59:59`;
       if (selectedUserId) filter.userId = selectedUserId;
       if (selectedDepartmentId) filter.departmentId = selectedDepartmentId;
       if (selectedPunchType !== '') filter.punchType = parseInt(selectedPunchType, 10);
@@ -185,10 +189,11 @@ export function RecordsPage() {
       
     } catch (error) {
       console.error('Failed to load records:', error);
+      showNotification('Failed to load records', 'error');
     } finally {
       setLoading(false);
     }
-  }, [dateFrom, dateTo, selectedUserId, selectedDepartmentId, selectedPunchType, sortField, sortDirection, currentPage, pageSize, setSearchParams]);
+  }, [debouncedDateFrom, debouncedDateTo, selectedUserId, selectedDepartmentId, selectedPunchType, sortField, sortDirection, currentPage, pageSize, setSearchParams]);
 
   useEffect(() => {
     loadRecords();

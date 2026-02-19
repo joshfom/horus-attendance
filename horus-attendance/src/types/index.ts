@@ -67,7 +67,6 @@ export type {
   SortParams,
   AttendanceRecordFilter,
   AttendanceRecordSortField,
-  DashboardStats,
   DeviceRow,
   DepartmentRow,
   UserRow,

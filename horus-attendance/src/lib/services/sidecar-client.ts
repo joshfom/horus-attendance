@@ -1,14 +1,14 @@
 /**
- * Sidecar Client
+ * Device Client
  * 
- * Handles communication with the Node.js ZKTeco sidecar process.
- * Uses a Rust proxy command to bypass webview HTTP restrictions in production.
+ * Communicates directly with ZKTeco devices via Rust-native protocol.
+ * No sidecar or HTTP proxy needed — Tauri commands handle everything.
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import type { DeviceConfig, DeviceInfo } from '../../types/models';
 
-// Types for sidecar communication
+// Types for device communication
 interface SidecarDeviceConfig {
   ip: string;
   port: number;
@@ -43,9 +43,9 @@ interface ConnectionTestResult {
 }
 
 /**
- * Convert app DeviceConfig to sidecar format
+ * Convert app DeviceConfig to command format
  */
-function toSidecarConfig(config: DeviceConfig): SidecarDeviceConfig {
+function toDeviceConfig(config: DeviceConfig): SidecarDeviceConfig {
   return {
     ip: config.ip,
     port: config.port,
@@ -57,9 +57,8 @@ function toSidecarConfig(config: DeviceConfig): SidecarDeviceConfig {
 /**
  * Sidecar Client class
  * 
- * Communicates with the Node.js ZKTeco sidecar via a Rust proxy command.
- * This bypasses the Tauri HTTP plugin scope restrictions that block
- * localhost requests in production builds.
+ * Now communicates directly with ZKTeco devices via Rust Tauri commands.
+ * The name is kept for backward compatibility with existing imports.
  */
 export class SidecarClient {
   private static instance: SidecarClient | null = null;
@@ -79,77 +78,51 @@ export class SidecarClient {
     this.isConnected = true;
   }
 
-  /**
-   * Send request to sidecar via Rust proxy command
-   */
-  private async sendRequest(endpoint: string, data: Record<string, unknown>): Promise<unknown> {
-    console.log(`[SidecarClient] Sending request to ${endpoint}`);
-    try {
-      const responseText = await invoke<string>('sidecar_request', {
-        endpoint,
-        body: JSON.stringify(data),
-      });
-      const result = JSON.parse(responseText);
-      console.log(`[SidecarClient] Response received from ${endpoint}`);
-      return result;
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error('[SidecarClient] Request error:', msg);
-      throw new Error(msg);
-    }
-  }
-
   async testConnection(config: DeviceConfig): Promise<ConnectionTestResult> {
-    const startTime = Date.now();
     try {
-      const result = await this.sendRequest('/test-connection', {
-        config: toSidecarConfig(config),
-      }) as { success: boolean; deviceInfo?: DeviceInfo; error?: string };
-      return {
-        success: result.success,
-        deviceInfo: result.deviceInfo,
-        error: result.error,
-        latency: Date.now() - startTime,
-      };
+      const result = await invoke<ConnectionTestResult>('test_device_connection', {
+        config: toDeviceConfig(config),
+      });
+      return result;
     } catch (error) {
       return {
         success: false,
         error: error instanceof Error ? error.message : String(error),
-        latency: Date.now() - startTime,
+        latency: 0,
       };
     }
   }
 
   async getDeviceInfo(config: DeviceConfig): Promise<DeviceInfo> {
-    return await this.sendRequest('/device-info', {
-      config: toSidecarConfig(config),
-    }) as DeviceInfo;
+    return await invoke<DeviceInfo>('get_device_info', {
+      config: toDeviceConfig(config),
+    });
   }
 
   async getUsers(config: DeviceConfig): Promise<SidecarUser[]> {
-    return await this.sendRequest('/users', {
-      config: toSidecarConfig(config),
-    }) as SidecarUser[];
+    return await invoke<SidecarUser[]>('get_device_users', {
+      config: toDeviceConfig(config),
+    });
   }
 
   async getAttendanceLogs(
     config: DeviceConfig,
     options?: SidecarSyncOptions
   ): Promise<SidecarAttendanceLog[]> {
-    return await this.sendRequest('/attendance-logs', {
-      config: toSidecarConfig(config),
-      options,
-    }) as SidecarAttendanceLog[];
+    return await invoke<SidecarAttendanceLog[]>('get_attendance_logs', {
+      config: toDeviceConfig(config),
+      options: options ?? null,
+    });
   }
 
   async syncAll(
     config: DeviceConfig,
     options?: SidecarSyncOptions
   ): Promise<{ users: SidecarUser[]; logs: SidecarAttendanceLog[] }> {
-    return await this.sendRequest('/sync-all', {
-      config: toSidecarConfig(config),
-      options,
-    }) as { users: SidecarUser[]; logs: SidecarAttendanceLog[] };
+    return await invoke<{ users: SidecarUser[]; logs: SidecarAttendanceLog[] }>('sync_device_all', {
+      config: toDeviceConfig(config),
+      options: options ?? null,
+    });
   }
 
   async disconnect(): Promise<void> {

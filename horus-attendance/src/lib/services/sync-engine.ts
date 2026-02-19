@@ -271,10 +271,14 @@ export class SyncEngine {
         errors.push(`Device sync error: ${errMsg}`);
       }
 
-      // Phase 2: Process users
+      // Phase 2: Process users (wrapped in transaction for atomicity)
       updateProgress(deviceId, 'users', 30, 100, 'Processing users...', progressCallback);
       
-      const existingUsers = await listUsers({ status: 'all' });
+      let syncedAt = new Date().toISOString();
+      await beginTransaction();
+
+      try {
+        const existingUsers = await listUsers({ status: 'all' });
       const existingDeviceUserIds = new Set(
         existingUsers
           .filter(u => u.deviceUserId)
@@ -355,12 +359,21 @@ export class SyncEngine {
       }
 
       // Update last sync timestamp
-      const syncedAt = new Date().toISOString();
+      syncedAt = new Date().toISOString();
       try {
         await updateLastSyncAt(deviceId, syncedAt);
         state.lastSyncAt = syncedAt;
       } catch (error) {
         errors.push(`Failed to update sync timestamp: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      // Commit the transaction wrapping user/log/summary inserts
+      await commitTransaction();
+      } catch (txError) {
+        // Rollback on any database failure
+        await rollbackTransaction().catch(() => {});
+        const txMsg = txError instanceof Error ? txError.message : String(txError);
+        errors.push(`Sync transaction failed: ${txMsg}`);
       }
 
       // Phase 5: Complete
