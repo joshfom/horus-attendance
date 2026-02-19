@@ -58,15 +58,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      # Build sidecar
-      - name: Install sidecar dependencies
-        run: npm ci
-        working-directory: horus-attendance/sidecar
-
-      - name: Build sidecar
-        run: npm run build
-        working-directory: horus-attendance/sidecar
-
       # Build frontend + Tauri app
       - name: Install frontend dependencies
         run: npm ci
@@ -95,8 +86,5 @@ jobs:
             ```
             xattr -cr /Applications/Horus\ Attendance.app
             ```
-
-            ### Sidecar
-            The ZKTeco sidecar must be run separately. See the README for instructions.
           releaseDraft: true
           prerelease: false
