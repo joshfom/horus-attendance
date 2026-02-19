@@ -67,6 +67,9 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ad-hoc sign macOS builds so Gatekeeper shows "unidentified developer"
+          # instead of "damaged" — users can then right-click → Open to bypass
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && '-' || '' }}
         with:
           projectPath: horus-attendance
           tauriScript: npx tauri
@@ -77,14 +80,21 @@ jobs:
             ## Horus Attendance ${{ github.ref_name }}
 
             ### Downloads
-            - **macOS (Apple Silicon)**: `.dmg` for M1/M2/M3+ Macs
-            - **Windows**: `.msi` installer
-            - **Linux**: `.deb` / `.AppImage`
+            | Platform | File | Notes |
+            |----------|------|-------|
+            | **macOS (Apple Silicon)** | `.dmg` | M1/M2/M3/M4 Macs |
+            | **Windows** | `.msi` or `.exe` | 64-bit installer |
+            | **Linux** | `.deb` / `.AppImage` / `.rpm` | 64-bit |
 
-            ### macOS — First Launch
-            The app is not code-signed. After installing, run in Terminal:
-            ```
+            ### macOS — First Launch (Important)
+            The app is not notarized with Apple. After downloading and installing:
+
+            **Option A** — Right-click the app → **Open** → click **Open** in the dialog.
+
+            **Option B** — If you see _"damaged and can't be opened"_, run in Terminal:
+            ```bash
             xattr -cr /Applications/Horus\ Attendance.app
             ```
+            Then open the app normally.
           releaseDraft: true
           prerelease: false
