@@ -107,6 +107,16 @@ fn get_migrations() -> Vec<Migration> {
             "#,
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 2,
+            description: "enable_wal_mode",
+            sql: r#"
+                PRAGMA journal_mode = WAL;
+                PRAGMA busy_timeout = 30000;
+                PRAGMA synchronous = NORMAL;
+            "#,
+            kind: MigrationKind::Up,
+        },
     ]
 }
 

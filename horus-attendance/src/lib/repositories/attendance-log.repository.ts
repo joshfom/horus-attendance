@@ -171,9 +171,9 @@ export async function insertLogs(logs: Array<{
       await execute(`RELEASE SAVEPOINT ${savepointName}`);
     } catch (error) {
       await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
+      await execute(`RELEASE SAVEPOINT ${savepointName}`).catch(() => {});
       // Log the batch error but continue with remaining batches
       console.error(`[insertLogs] Batch starting at ${batchStart} failed:`, error);
-      throw error;
     }
   }
 
