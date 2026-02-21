@@ -1,0 +1,19 @@
+perf: multi-row INSERT for logs and summaries (~50x fewer IPC calls)
+
+v0.2.5 - Fix log insertion stuck at 100/11,720 on Windows
+
+Root cause: insertLogs was doing 11,720 individual INSERT statements,
+each going through Tauri's IPC bridge. On Windows, each round-trip is
+slow, so the sync would appear stuck.
+
+Logs (attendance-log.repository.ts):
+- Multi-row INSERT: 50 rows per SQL statement instead of 1
+- For 11,720 logs: ~235 SQL calls instead of 11,720 (50x reduction)
+- BATCH_SIZE increased to 500 per savepoint
+- Progress reported per chunk (every 50 rows) for smooth updates
+
+Summaries (sync-engine.ts generateSummariesFromLogs):
+- CPU-first: compute all summaries in memory, then bulk-INSERT
+- Multi-row INSERT ON CONFLICT: 1 SQL call per batch of 50 summaries
+- For 1,650 summaries: ~33 SQL calls instead of 3,300 (100x reduction)
+- Removed per-row upsertSummary call (which did INSERT + SELECT = 2 calls)

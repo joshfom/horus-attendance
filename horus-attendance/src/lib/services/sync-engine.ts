@@ -11,7 +11,6 @@ import { getDeviceCommunicationService, type DeviceError } from './device-commun
 import { getDeviceById, updateLastSyncAt } from '../repositories/device.repository';
 import { createUser, listUsers } from '../repositories/user.repository';
 import { insertLogs } from '../repositories/attendance-log.repository';
-import { upsertSummary } from '../repositories/attendance-summary.repository';
 import { processDay, DEFAULT_ATTENDANCE_RULES } from './rule-engine';
 import { settingsRepository } from '../repositories/settings.repository';
 import { holidayRepository } from '../repositories/holiday.repository';
@@ -601,7 +600,9 @@ export class SyncEngine {
     }
 
     // Process each user+date combination in batched transactions
-    // to avoid both slow auto-commits and long-held locks
+    // to avoid both slow auto-commits and long-held locks.
+    // Compute all summaries in CPU first, then bulk-INSERT per batch
+    // to minimise IPC round-trips (1 SQL call per batch instead of N×2).
     let processed = 0;
     const total = userDateLogs.size;
     const entries = Array.from(userDateLogs.entries());
@@ -617,52 +618,102 @@ export class SyncEngine {
       if (abortSignal?.aborted) throw new Error('Sync cancelled');
 
       const batch = entries.slice(batchStart, batchStart + SUMMARY_BATCH_SIZE);
-      
-      // Wrap each batch in a savepoint for performance
-      const savepointName = `summaries_${batchStart}`;
-      try {
-        await execute(`SAVEPOINT ${savepointName}`);
-        
-        for (const [key, { user, logs: dateLogs }] of batch) {
-          const date = key.split('|')[1] as string;
-          
-          try {
-            const punches: PunchRecord[] = dateLogs.map(log => ({
-              id: log.id,
-              userId: user.id,
-              deviceId: log.device_id,
-              deviceUserId: log.device_user_id,
-              timestamp: log.timestamp,
-              punchType: log.punch_type ?? 0,
-              verifyType: log.verify_type ?? 0,
-              createdAt: log.created_at,
-            }));
 
-            const isHoliday = holidays.has(date);
-            const summary = processDay(user.id, date, punches, rules, isHoliday);
+      // Phase 1: Compute all summaries in CPU (no DB calls)
+      const computedSummaries: Array<{
+        id: string;
+        userId: string;
+        date: string;
+        checkInTime: string | null;
+        checkOutTime: string | null;
+        isIncomplete: number;
+        lateMinutes: number;
+        earlyMinutes: number;
+        status: string;
+        flags: string;
+        timestamp: string;
+      }> = [];
 
-            await upsertSummary({
-              userId: user.id,
-              date: date,
-              checkInTime: summary.checkInTime,
-              checkOutTime: summary.checkOutTime,
-              isIncomplete: summary.isIncomplete,
-              lateMinutes: summary.lateMinutes,
-              earlyMinutes: summary.earlyMinutes,
-              status: summary.status,
-              flags: summary.flags,
-            });
-          } catch (error) {
-            console.error(`[SyncEngine] Error processing ${user.displayName} on ${date}:`, error);
+      for (const [key, { user, logs: dateLogs }] of batch) {
+        const date = key.split('|')[1] as string;
+
+        try {
+          const punches: PunchRecord[] = dateLogs.map(log => ({
+            id: log.id,
+            userId: user.id,
+            deviceId: log.device_id,
+            deviceUserId: log.device_user_id,
+            timestamp: log.timestamp,
+            punchType: log.punch_type ?? 0,
+            verifyType: log.verify_type ?? 0,
+            createdAt: log.created_at,
+          }));
+
+          const isHoliday = holidays.has(date);
+          const summary = processDay(user.id, date, punches, rules, isHoliday);
+
+          computedSummaries.push({
+            id: crypto.randomUUID(),
+            userId: user.id,
+            date,
+            checkInTime: summary.checkInTime ?? null,
+            checkOutTime: summary.checkOutTime ?? null,
+            isIncomplete: summary.isIncomplete ? 1 : 0,
+            lateMinutes: summary.lateMinutes ?? 0,
+            earlyMinutes: summary.earlyMinutes ?? 0,
+            status: summary.status ?? 'absent',
+            flags: JSON.stringify(summary.flags ?? []),
+            timestamp: new Date().toISOString(),
+          });
+        } catch (error) {
+          console.error(`[SyncEngine] Error processing ${user.displayName} on ${date}:`, error);
+        }
+
+        processed++;
+      }
+
+      // Phase 2: Bulk insert all computed summaries in one multi-row SQL call
+      if (computedSummaries.length > 0) {
+        const savepointName = `summaries_${batchStart}`;
+        try {
+          await execute(`SAVEPOINT ${savepointName}`);
+
+          const placeholders: string[] = [];
+          const params: unknown[] = [];
+
+          for (const s of computedSummaries) {
+            placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+            params.push(
+              s.id, s.userId, s.date,
+              s.checkInTime, s.checkOutTime, s.isIncomplete,
+              s.lateMinutes, s.earlyMinutes, s.status, s.flags,
+              s.timestamp, s.timestamp,
+            );
           }
 
-          processed++;
+          await execute(
+            `INSERT INTO attendance_day_summary
+             (id, user_id, date, check_in_time, check_out_time, is_incomplete,
+              late_minutes, early_minutes, status, flags, created_at, updated_at)
+             VALUES ${placeholders.join(',\n                    ')}
+             ON CONFLICT(user_id, date) DO UPDATE SET
+               check_in_time = excluded.check_in_time,
+               check_out_time = excluded.check_out_time,
+               is_incomplete = excluded.is_incomplete,
+               late_minutes = excluded.late_minutes,
+               early_minutes = excluded.early_minutes,
+               status = excluded.status,
+               flags = excluded.flags,
+               updated_at = excluded.updated_at`,
+            params
+          );
+
+          await execute(`RELEASE SAVEPOINT ${savepointName}`);
+        } catch (batchError) {
+          await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
+          await execute(`RELEASE SAVEPOINT ${savepointName}`).catch(() => {});
+          console.error(`[SyncEngine] Summary batch failed at offset ${batchStart}:`, batchError);
         }
-        
-        await execute(`RELEASE SAVEPOINT ${savepointName}`);
-      } catch (batchError) {
-        await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
-        console.error(`[SyncEngine] Summary batch failed at offset ${batchStart}:`, batchError);
       }
 
       // Yield to event loop so UI stays responsive and other DB operations can interleave

@@ -104,11 +104,12 @@ export async function insertLog(log: {
 
 /**
  * Bulk insert attendance logs with deduplication
- * Uses a transaction for performance and atomicity.
- * Processes in batches to avoid holding write locks too long.
- * Supports userName for user matching.
- * 
- * @param onProgress - Optional callback reporting (processed, total) after each batch
+ * Uses multi-row INSERT statements to minimise IPC round-trips.
+ * Each SQL call inserts up to ROWS_PER_INSERT rows at once instead of
+ * one-by-one, reducing ~12 000 IPC calls to ~240 (≈ 50× faster).
+ * Processes in savepoint batches so a single failure doesn't lose everything.
+ *
+ * @param onProgress - Optional callback reporting (processed, total) after each chunk
  * @param abortSignal - Optional AbortSignal for cancellation
  */
 export async function insertLogs(
@@ -131,9 +132,12 @@ export async function insertLogs(
   let inserted = 0;
   let duplicates = 0;
 
-  // Process in batches — each batch is its own transaction to avoid
-  // holding long write locks that cause "database is locked" errors.
-  const BATCH_SIZE = 100;
+  // Multi-row INSERT: 50 rows × 8 columns = 400 params (well within SQLite's 999 limit)
+  const ROWS_PER_INSERT = 50;
+  // Savepoint batch: group several multi-row inserts under one savepoint
+  const BATCH_SIZE = 500;
+
+  const { yieldToUI } = await import('../database');
 
   for (let batchStart = 0; batchStart < logs.length; batchStart += BATCH_SIZE) {
     // Check for cancellation between batches
@@ -142,27 +146,31 @@ export async function insertLogs(
       break;
     }
 
-    const batch = logs.slice(batchStart, batchStart + BATCH_SIZE);
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, logs.length);
+    const batch = logs.slice(batchStart, batchEnd);
 
     // Each batch gets its own savepoint for atomicity
     const savepointName = `insert_logs_${batchStart}`;
     await execute(`SAVEPOINT ${savepointName}`);
 
     try {
-      for (const log of batch) {
-        const id = generateId();
-        const createdAt = now();
+      // Process the batch in multi-row INSERT chunks
+      for (let i = 0; i < batch.length; i += ROWS_PER_INSERT) {
+        const chunk = batch.slice(i, i + ROWS_PER_INSERT);
+        const placeholders: string[] = [];
+        const params: unknown[] = [];
 
-        let rawPayload = log.rawPayload ?? null;
-        if (log.userName) {
-          rawPayload = JSON.stringify({ userName: log.userName });
-        }
+        for (const log of chunk) {
+          const id = generateId();
+          const createdAt = now();
 
-        const result = await execute(
-          `INSERT OR IGNORE INTO attendance_logs_raw 
-           (id, device_id, device_user_id, timestamp, verify_type, punch_type, raw_payload, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
+          let rawPayload = log.rawPayload ?? null;
+          if (log.userName) {
+            rawPayload = JSON.stringify({ userName: log.userName });
+          }
+
+          placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?)');
+          params.push(
             id,
             log.deviceId,
             log.deviceUserId,
@@ -171,13 +179,22 @@ export async function insertLogs(
             log.punchType ?? null,
             rawPayload,
             createdAt,
-          ]
+          );
+        }
+
+        const result = await execute(
+          `INSERT OR IGNORE INTO attendance_logs_raw
+           (id, device_id, device_user_id, timestamp, verify_type, punch_type, raw_payload, created_at)
+           VALUES ${placeholders.join(',\n                  ')}`,
+          params
         );
 
-        if (result.rowsAffected > 0) {
-          inserted++;
-        } else {
-          duplicates++;
+        inserted += result.rowsAffected;
+        duplicates += chunk.length - result.rowsAffected;
+
+        // Report progress per chunk (every 50 rows) for smooth updates
+        if (onProgress) {
+          onProgress(Math.min(batchStart + i + chunk.length, logs.length), logs.length);
         }
       }
 
@@ -188,16 +205,9 @@ export async function insertLogs(
       // Log the batch error but continue with remaining batches
       console.error(`[insertLogs] Batch starting at ${batchStart} failed:`, error);
     }
-    
-    // Yield to event loop between batches so UI stays responsive
-    // and other DB operations (department CRUD, etc.) are not starved
-    const { yieldToUI } = await import('../database');
-    await yieldToUI();
 
-    // Report per-batch progress
-    if (onProgress) {
-      onProgress(Math.min(batchStart + BATCH_SIZE, logs.length), logs.length);
-    }
+    // Yield to event loop between batches so UI stays responsive
+    await yieldToUI();
   }
 
   return { inserted, duplicates };
