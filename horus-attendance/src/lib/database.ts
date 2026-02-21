@@ -92,6 +92,17 @@ async function retryOnLock<T>(fn: () => Promise<T>, maxRetries = 5): Promise<T> 
 }
 
 /**
+ * Yield control back to the browser event loop.
+ * Call this between heavy DB batches so React can re-render,
+ * progress callbacks fire, and other CRUD operations (departments, users)
+ * can execute without being starved.
+ * Uses setTimeout(0) to break out of the microtask queue.
+ */
+export function yieldToUI(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+/**
  * Flush all data from the database tables.
  * This deletes all records but keeps the schema intact.
  */

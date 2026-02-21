@@ -175,6 +175,11 @@ export async function insertLogs(logs: Array<{
       // Log the batch error but continue with remaining batches
       console.error(`[insertLogs] Batch starting at ${batchStart} failed:`, error);
     }
+    
+    // Yield to event loop between batches so UI stays responsive
+    // and other DB operations (department CRUD, etc.) are not starved
+    const { yieldToUI } = await import('../database');
+    await yieldToUI();
   }
 
   return { inserted, duplicates };

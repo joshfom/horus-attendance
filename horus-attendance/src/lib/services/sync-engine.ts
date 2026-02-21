@@ -6,7 +6,7 @@
  * Requirements: 2.1, 2.4, 2.5, 2.6
  */
 
-import { execute, select } from '../database';
+import { execute, select, yieldToUI } from '../database';
 import { getDeviceCommunicationService, type DeviceError } from './device-communication';
 import { getDeviceById, updateLastSyncAt } from '../repositories/device.repository';
 import { createUser, listUsers } from '../repositories/user.repository';
@@ -315,7 +315,9 @@ export class SyncEngine {
           }
         }
         
+        // Yield every 10 users so the UI can re-render and other CRUD works
         if (i % 10 === 0) {
+          await yieldToUI();
           updateProgress(
             deviceId, 
             'processing', 
@@ -328,7 +330,8 @@ export class SyncEngine {
       }
 
       // Phase 3: Insert attendance logs
-      // insertLogs() manages its own SAVEPOINT for batch atomicity
+      // insertLogs() manages its own SAVEPOINT for batch atomicity and yields between batches
+      await yieldToUI();
       updateProgress(deviceId, 'processing', 40, 100, 'Inserting attendance logs...', progressCallback);
       
       if (deviceLogs.length > 0) {
@@ -351,6 +354,7 @@ export class SyncEngine {
       }
 
       // Phase 4: Generate daily summaries from raw logs
+      await yieldToUI();
       updateProgress(deviceId, 'processing', 60, 100, 'Generating attendance summaries...', progressCallback);
       
       try {
@@ -591,6 +595,9 @@ export class SyncEngine {
         await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
         console.error(`[SyncEngine] Summary batch failed at offset ${batchStart}:`, batchError);
       }
+
+      // Yield to event loop so UI stays responsive and other DB operations can interleave
+      await yieldToUI();
 
       if (progressCallback) {
         updateProgress(

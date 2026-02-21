@@ -84,53 +84,118 @@ export async function upsertSummary(summary: {
   status?: AttendanceStatus;
   flags?: string[];
 }): Promise<DailySummary> {
+  const id = generateId();
   const timestamp = now();
-  const existing = await getSummaryForUserOnDate(summary.userId, summary.date);
   
-  if (existing) {
-    // Update existing
-    await execute(
-      `UPDATE attendance_day_summary SET
-        check_in_time = ?, check_out_time = ?, is_incomplete = ?,
-        late_minutes = ?, early_minutes = ?, status = ?, flags = ?, updated_at = ?
-       WHERE id = ?`,
-      [
-        summary.checkInTime ?? existing.checkInTime,
-        summary.checkOutTime ?? existing.checkOutTime,
-        (summary.isIncomplete ?? existing.isIncomplete) ? 1 : 0,
-        summary.lateMinutes ?? existing.lateMinutes,
-        summary.earlyMinutes ?? existing.earlyMinutes,
-        summary.status ?? existing.status,
-        JSON.stringify(summary.flags ?? existing.flags),
-        timestamp,
-        existing.id,
-      ]
-    );
-    return (await getSummaryById(existing.id))!;
-  } else {
-    // Insert new
-    const id = generateId();
-    await execute(
-      `INSERT INTO attendance_day_summary 
-       (id, user_id, date, check_in_time, check_out_time, is_incomplete, 
-        late_minutes, early_minutes, status, flags, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        summary.userId,
-        summary.date,
-        summary.checkInTime ?? null,
-        summary.checkOutTime ?? null,
-        summary.isIncomplete ? 1 : 0,
-        summary.lateMinutes ?? 0,
-        summary.earlyMinutes ?? 0,
-        summary.status ?? 'absent',
-        JSON.stringify(summary.flags ?? []),
-        timestamp,
-        timestamp,
-      ]
-    );
-    return (await getSummaryById(id))!;
+  // Single INSERT ... ON CONFLICT UPDATE — 1 SQL call instead of SELECT+UPDATE/INSERT.
+  // This avoids holding a read lock followed by a write lock, which on Windows
+  // causes "database is locked" when other operations try to interleave.
+  await execute(
+    `INSERT INTO attendance_day_summary 
+     (id, user_id, date, check_in_time, check_out_time, is_incomplete, 
+      late_minutes, early_minutes, status, flags, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, date) DO UPDATE SET
+       check_in_time = excluded.check_in_time,
+       check_out_time = excluded.check_out_time,
+       is_incomplete = excluded.is_incomplete,
+       late_minutes = excluded.late_minutes,
+       early_minutes = excluded.early_minutes,
+       status = excluded.status,
+       flags = excluded.flags,
+       updated_at = excluded.updated_at`,
+    [
+      id,
+      summary.userId,
+      summary.date,
+      summary.checkInTime ?? null,
+      summary.checkOutTime ?? null,
+      summary.isIncomplete ? 1 : 0,
+      summary.lateMinutes ?? 0,
+      summary.earlyMinutes ?? 0,
+      summary.status ?? 'absent',
+      JSON.stringify(summary.flags ?? []),
+      timestamp,
+      timestamp,
+    ]
+  );
+  
+  // Return the current state (may be the just-inserted or the updated row)
+  const result = await getSummaryForUserOnDate(summary.userId, summary.date);
+  return result!;
+}
+
+/**
+ * Bulk upsert summaries in a single savepoint.
+ * Yields to the event loop between batches so the UI stays responsive
+ * and other DB operations (CRUD) are not starved.
+ */
+export async function upsertSummaryBatch(summaries: Array<{
+  userId: string;
+  date: string;
+  checkInTime?: string | null;
+  checkOutTime?: string | null;
+  isIncomplete?: boolean;
+  lateMinutes?: number;
+  earlyMinutes?: number;
+  status?: AttendanceStatus;
+  flags?: string[];
+}>): Promise<void> {
+  if (summaries.length === 0) return;
+  
+  const timestamp = now();
+  const BATCH_SIZE = 50;
+  
+  for (let batchStart = 0; batchStart < summaries.length; batchStart += BATCH_SIZE) {
+    const batch = summaries.slice(batchStart, batchStart + BATCH_SIZE);
+    const savepointName = `upsert_summary_${batchStart}`;
+    
+    try {
+      await execute(`SAVEPOINT ${savepointName}`);
+      
+      for (const summary of batch) {
+        const id = generateId();
+        await execute(
+          `INSERT INTO attendance_day_summary 
+           (id, user_id, date, check_in_time, check_out_time, is_incomplete, 
+            late_minutes, early_minutes, status, flags, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id, date) DO UPDATE SET
+             check_in_time = excluded.check_in_time,
+             check_out_time = excluded.check_out_time,
+             is_incomplete = excluded.is_incomplete,
+             late_minutes = excluded.late_minutes,
+             early_minutes = excluded.early_minutes,
+             status = excluded.status,
+             flags = excluded.flags,
+             updated_at = excluded.updated_at`,
+          [
+            id,
+            summary.userId,
+            summary.date,
+            summary.checkInTime ?? null,
+            summary.checkOutTime ?? null,
+            summary.isIncomplete ? 1 : 0,
+            summary.lateMinutes ?? 0,
+            summary.earlyMinutes ?? 0,
+            summary.status ?? 'absent',
+            JSON.stringify(summary.flags ?? []),
+            timestamp,
+            timestamp,
+          ]
+        );
+      }
+      
+      await execute(`RELEASE SAVEPOINT ${savepointName}`);
+    } catch (error) {
+      await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
+      await execute(`RELEASE SAVEPOINT ${savepointName}`).catch(() => {});
+      console.error(`[upsertSummaryBatch] Batch at ${batchStart} failed:`, error);
+    }
+    
+    // Yield to event loop so UI and other CRUD operations stay responsive
+    const { yieldToUI } = await import('../database');
+    await yieldToUI();
   }
 }
 
