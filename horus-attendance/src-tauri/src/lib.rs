@@ -177,14 +177,24 @@ async fn export_backup(app: tauri::AppHandle, destination: Option<String>) -> Re
         });
     }
     
-    let backup_dir = match destination {
-        Some(dest) => PathBuf::from(dest),
-        None => get_backup_dir(&app)?,
+    let backup_path = match destination {
+        Some(dest) => {
+            // The save dialog returns a full file path — use it directly
+            PathBuf::from(dest)
+        },
+        None => {
+            let backup_dir = get_backup_dir(&app)?;
+            let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
+            let backup_filename = format!("horus_backup_{}.db", timestamp);
+            backup_dir.join(&backup_filename)
+        },
     };
     
-    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S");
-    let backup_filename = format!("horus_backup_{}.db", timestamp);
-    let backup_path = backup_dir.join(&backup_filename);
+    // Ensure parent directory exists
+    if let Some(parent) = backup_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create backup directory: {}", e))?;
+    }
     
     // Copy the database file
     fs::copy(&db_path, &backup_path)

@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { AppSettings, AttendanceRules, Holiday, CreateHolidayInput, ExportSettings } from '../types/models';
 import { settingsRepository } from '../lib/repositories/settings.repository';
 import { holidayRepository } from '../lib/repositories/holiday.repository';
-import { exportBackup, isTauriEnvironment, formatFileSize, resetDatabase } from '../lib/tauri-commands';
+import { exportBackup, restoreBackup, selectBackupFile, selectBackupDestination, isTauriEnvironment, formatFileSize, resetDatabase } from '../lib/tauri-commands';
 import { useApp } from '../contexts';
 import { ConfirmDialog } from '../components/ui';
 
@@ -922,7 +922,7 @@ export function SettingsPage() {
     showNotification('Holiday deleted successfully', 'success');
   };
 
-  // Export backup
+  // Export backup — opens a save dialog so user picks the location
   const handleExportBackup = async () => {
     if (!isTauriEnvironment()) {
       showNotification('Backup requires the desktop application', 'error');
@@ -930,7 +930,10 @@ export function SettingsPage() {
     }
     
     try {
-      const result = await exportBackup();
+      const destination = await selectBackupDestination();
+      if (!destination) return; // user cancelled
+
+      const result = await exportBackup(destination);
       if (result.success) {
         // Update last backup time
         if (settings) {
@@ -941,7 +944,7 @@ export function SettingsPage() {
           await settingsRepository.updateAppSettings({ backup: newBackupSettings });
           setSettings({ ...settings, backup: newBackupSettings });
         }
-        showNotification(`Backup created: ${formatFileSize(result.file_size)}`, 'success');
+        showNotification(`Backup saved (${formatFileSize(result.file_size)}) to ${result.file_path}`, 'success');
       } else {
         showNotification(result.error || 'Backup failed', 'error');
       }
@@ -950,15 +953,26 @@ export function SettingsPage() {
     }
   };
 
-  // Import backup
+  // Import backup — opens a file picker so user selects a .db file
   const handleImportBackup = async () => {
     if (!isTauriEnvironment()) {
       showNotification('Restore requires the desktop application', 'error');
       return;
     }
     
-    // For now, show a message that file dialog integration is needed
-    showNotification('Please use the file browser to select a backup file', 'info');
+    try {
+      const filePath = await selectBackupFile();
+      if (!filePath) return; // user cancelled
+
+      const result = await restoreBackup(filePath);
+      if (result.success) {
+        showNotification('Backup restored successfully. Please restart the application.', 'success');
+      } else {
+        showNotification(result.error || 'Restore failed', 'error');
+      }
+    } catch (error) {
+      showNotification(error instanceof Error ? error.message : 'Restore failed', 'error');
+    }
   };
 
   // Reset database
