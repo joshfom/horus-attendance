@@ -4,7 +4,7 @@ import type { Device, DeviceConfig, DeviceInfo } from '../types/models';
 import type { SyncOptions, SyncResult, SyncProgress } from '../types/services';
 import { listDevices, saveDevice, deleteDevice } from '../lib/repositories/device.repository';
 import { getSyncEngine } from '../lib/services/sync-engine';
-import { useApp } from '../contexts';
+import { useApp, useSync } from '../contexts';
 import { ConfirmDialog } from '../components/ui';
 
 // Animation variants
@@ -37,12 +37,6 @@ interface ConnectionStatus {
   deviceInfo: DeviceInfo | null;
   error: string | null;
   latency: number;
-}
-
-interface SyncState {
-  syncing: boolean;
-  progress: SyncProgress | null;
-  result: SyncResult | null;
 }
 
 interface DeviceFormData {
@@ -96,14 +90,17 @@ function ProgressBar({ progress }: { progress: SyncProgress }) {
   const percentage = Math.round((progress.current / progress.total) * 100);
   const phaseLabels: Record<SyncProgress['phase'], string> = {
     connecting: 'Connecting...',
+    fetching: 'Fetching from device...',
     users: 'Syncing Users',
-    logs: 'Syncing Logs',
-    processing: 'Processing',
+    logs: 'Inserting Logs',
+    processing: 'Processing Summaries',
     complete: 'Complete',
   };
 
+  const details = progress.details;
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       <div className="flex justify-between text-sm">
         <span className="text-secondary-300">{phaseLabels[progress.phase]}</span>
         <span className="text-secondary-400">{percentage}%</span>
@@ -117,6 +114,36 @@ function ProgressBar({ progress }: { progress: SyncProgress }) {
         />
       </div>
       <p className="text-xs text-secondary-400">{progress.message}</p>
+
+      {/* Detailed record counts */}
+      {details && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-2">
+          {details.totalRecordsFetched != null && details.totalRecordsFetched > 0 && (
+            <div className="bg-secondary-700/50 rounded-lg p-2 text-center">
+              <p className="text-xs text-secondary-400">Fetched</p>
+              <p className="text-sm font-semibold text-white">{details.totalRecordsFetched.toLocaleString()}</p>
+            </div>
+          )}
+          {details.usersTotal != null && details.usersTotal > 0 && (
+            <div className="bg-secondary-700/50 rounded-lg p-2 text-center">
+              <p className="text-xs text-secondary-400">Users</p>
+              <p className="text-sm font-semibold text-white">{details.usersProcessed ?? 0} / {details.usersTotal}</p>
+            </div>
+          )}
+          {details.logsTotal != null && details.logsTotal > 0 && (
+            <div className="bg-secondary-700/50 rounded-lg p-2 text-center">
+              <p className="text-xs text-secondary-400">Logs</p>
+              <p className="text-sm font-semibold text-white">{(details.logsProcessed ?? 0).toLocaleString()} / {details.logsTotal.toLocaleString()}</p>
+            </div>
+          )}
+          {details.summariesTotal != null && details.summariesTotal > 0 && (
+            <div className="bg-secondary-700/50 rounded-lg p-2 text-center">
+              <p className="text-xs text-secondary-400">Summaries</p>
+              <p className="text-sm font-semibold text-white">{(details.summariesProcessed ?? 0).toLocaleString()} / {details.summariesTotal.toLocaleString()}</p>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -418,7 +445,8 @@ function SyncOptionsForm({
 
 // Main Sync Page Component
 export function SyncPage() {
-  const { showNotification, refreshDashboard } = useApp();
+  const { showNotification } = useApp();
+  const { activeSync, lastResult, isSyncing, startSync, cancelSync, clearResult } = useSync();
   
   // Device state
   const [devices, setDevices] = useState<Device[]>([]);
@@ -436,13 +464,6 @@ export function SyncPage() {
     deviceInfo: null,
     error: null,
     latency: 0,
-  });
-
-  // Sync state
-  const [syncState, setSyncState] = useState<SyncState>({
-    syncing: false,
-    progress: null,
-    result: null,
   });
 
   // Sync options state
@@ -493,7 +514,7 @@ export function SyncPage() {
       setFormData(defaultFormData);
     }
     setConnectionStatus({ testing: false, success: null, deviceInfo: null, error: null, latency: 0 });
-    setSyncState({ syncing: false, progress: null, result: null });
+    clearResult();
   };
 
   const validateForm = (): boolean => {
@@ -578,44 +599,19 @@ export function SyncPage() {
 
   const handleSync = useCallback(async () => {
     if (!selectedDeviceId) return;
-    setSyncState({ syncing: true, progress: null, result: null });
-    try {
-      const options: SyncOptions = { mode: syncMode };
-      if (syncMode === 'days') options.days = syncDays;
-      if (syncMode === 'range') {
-        options.startDate = syncStartDate;
-        options.endDate = syncEndDate;
-      }
-      const result = await syncEngine.syncDevice(
-        selectedDeviceId,
-        options,
-        (progress) => setSyncState((prev) => ({ ...prev, progress }))
-      );
-      setSyncState({ syncing: false, progress: null, result });
-      await loadDevices(); // Refresh to get updated lastSyncAt
-      await refreshDashboard(); // Refresh dashboard stats
-      if (result.success) {
-        showNotification(`Sync completed: ${result.logsAdded} logs added, ${result.usersAdded} users added`, 'success');
-      } else {
-        showNotification(`Sync completed with errors: ${result.errors.join(', ')}`, 'error');
-      }
-    } catch (error) {
-      setSyncState({
-        syncing: false,
-        progress: null,
-        result: {
-          success: false,
-          usersAdded: 0,
-          usersSynced: 0,
-          logsAdded: 0,
-          logsDeduplicated: 0,
-          errors: [error instanceof Error ? error.message : 'Sync failed'],
-          syncedAt: new Date().toISOString(),
-        },
-      });
-      showNotification(error instanceof Error ? error.message : 'Sync failed', 'error');
+    const selectedDev = devices.find((d) => d.id === selectedDeviceId);
+    if (!selectedDev) return;
+    
+    const options: SyncOptions = { mode: syncMode };
+    if (syncMode === 'days') options.days = syncDays;
+    if (syncMode === 'range') {
+      options.startDate = syncStartDate;
+      options.endDate = syncEndDate;
     }
-  }, [selectedDeviceId, syncMode, syncDays, syncStartDate, syncEndDate, syncEngine, showNotification, refreshDashboard]);
+    
+    await startSync(selectedDeviceId, selectedDev.name, options);
+    await loadDevices(); // Refresh to get updated lastSyncAt
+  }, [selectedDeviceId, devices, syncMode, syncDays, syncStartDate, syncEndDate, startSync]);
 
   const selectedDevice = devices.find((d) => d.id === selectedDeviceId);
 
@@ -771,10 +767,10 @@ export function SyncPage() {
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 onClick={handleSync}
-                disabled={syncState.syncing}
+                disabled={isSyncing}
                 className="btn-primary flex items-center gap-2"
               >
-                {syncState.syncing ? (
+                {isSyncing ? (
                   <motion.div
                     animate={{ rotate: 360 }}
                     transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
@@ -785,9 +781,24 @@ export function SyncPage() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
                 )}
-                Sync Now
+                {isSyncing ? 'Syncing...' : 'Sync Now'}
               </motion.button>
-              {selectedDevice.lastSyncAt && (
+              {isSyncing && (
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={cancelSync}
+                  className="btn-secondary flex items-center gap-2 text-danger-400 border-danger-600/30 hover:bg-danger-600/10"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                  Cancel
+                </motion.button>
+              )}
+              {selectedDevice.lastSyncAt && !isSyncing && (
                 <span className="text-sm text-secondary-400">
                   Last synced: {new Date(selectedDevice.lastSyncAt).toLocaleString()}
                 </span>
@@ -796,28 +807,34 @@ export function SyncPage() {
 
             {/* Sync Progress */}
             <AnimatePresence mode="wait">
-              {syncState.syncing && syncState.progress && (
+              {isSyncing && activeSync?.progress && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
                   className="mt-6"
                 >
-                  <ProgressBar progress={syncState.progress} />
+                  <ProgressBar progress={activeSync.progress} />
                 </motion.div>
               )}
             </AnimatePresence>
 
             {/* Sync Result */}
             <AnimatePresence mode="wait">
-              {syncState.result && !syncState.syncing && (
+              {lastResult && !isSyncing && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
                   className="mt-6 pt-6 border-t border-secondary-700"
                 >
-                  <SyncResultDisplay result={syncState.result} />
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-medium text-secondary-300">Last Sync Result</h3>
+                    <button onClick={clearResult} className="text-xs text-secondary-500 hover:text-secondary-300">
+                      Dismiss
+                    </button>
+                  </div>
+                  <SyncResultDisplay result={lastResult} />
                 </motion.div>
               )}
             </AnimatePresence>

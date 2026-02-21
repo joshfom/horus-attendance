@@ -107,16 +107,23 @@ export async function insertLog(log: {
  * Uses a transaction for performance and atomicity.
  * Processes in batches to avoid holding write locks too long.
  * Supports userName for user matching.
+ * 
+ * @param onProgress - Optional callback reporting (processed, total) after each batch
+ * @param abortSignal - Optional AbortSignal for cancellation
  */
-export async function insertLogs(logs: Array<{
-  deviceId: string;
-  deviceUserId: string;
-  timestamp: string;
-  verifyType?: number;
-  punchType?: number;
-  rawPayload?: string;
-  userName?: string | null;
-}>): Promise<{ inserted: number; duplicates: number }> {
+export async function insertLogs(
+  logs: Array<{
+    deviceId: string;
+    deviceUserId: string;
+    timestamp: string;
+    verifyType?: number;
+    punchType?: number;
+    rawPayload?: string;
+    userName?: string | null;
+  }>,
+  onProgress?: (processed: number, total: number) => void,
+  abortSignal?: AbortSignal
+): Promise<{ inserted: number; duplicates: number }> {
   if (logs.length === 0) {
     return { inserted: 0, duplicates: 0 };
   }
@@ -129,6 +136,12 @@ export async function insertLogs(logs: Array<{
   const BATCH_SIZE = 100;
 
   for (let batchStart = 0; batchStart < logs.length; batchStart += BATCH_SIZE) {
+    // Check for cancellation between batches
+    if (abortSignal?.aborted) {
+      console.log(`[insertLogs] Cancelled after ${batchStart} records`);
+      break;
+    }
+
     const batch = logs.slice(batchStart, batchStart + BATCH_SIZE);
 
     // Each batch gets its own savepoint for atomicity
@@ -180,6 +193,11 @@ export async function insertLogs(logs: Array<{
     // and other DB operations (department CRUD, etc.) are not starved
     const { yieldToUI } = await import('../database');
     await yieldToUI();
+
+    // Report per-batch progress
+    if (onProgress) {
+      onProgress(Math.min(batchStart + BATCH_SIZE, logs.length), logs.length);
+    }
   }
 
   return { inserted, duplicates };

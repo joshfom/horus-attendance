@@ -69,7 +69,7 @@ function getSyncState(deviceId: string): SyncState {
 }
 
 /**
- * Update sync progress
+ * Update sync progress with detailed record counts
  */
 function updateProgress(
   deviceId: string, 
@@ -77,10 +77,15 @@ function updateProgress(
   current: number, 
   total: number, 
   message: string,
-  callback?: SyncProgressCallback
+  callback?: SyncProgressCallback,
+  details?: SyncProgress['details']
 ): void {
   const state = getSyncState(deviceId);
-  state.progress = { phase, current, total, message };
+  const progress: SyncProgress = { phase, current, total, message };
+  if (details) {
+    progress.details = details;
+  }
+  state.progress = progress;
   if (callback) {
     callback(state.progress);
   }
@@ -201,13 +206,17 @@ export class SyncEngine {
   }
 
   /**
-   * Sync users and attendance logs from a device
-   * Uses the combined /sync-all endpoint to avoid concurrent device connections
+   * Sync users and attendance logs from a device.
+   * 
+   * Accepts an optional AbortSignal for cancellation support.
+   * Reports rich progress with actual record counts so the UI can
+   * show "Inserting log 342 / 5,000" instead of just "40%".
    */
   async syncDevice(
     deviceId: string, 
     options: SyncOptions,
-    progressCallback?: SyncProgressCallback
+    progressCallback?: SyncProgressCallback,
+    abortSignal?: AbortSignal
   ): Promise<SyncResult> {
     const state = getSyncState(deviceId);
     
@@ -224,6 +233,13 @@ export class SyncEngine {
       };
     }
 
+    /** Helper: throw if user cancelled */
+    const checkAbort = () => {
+      if (abortSignal?.aborted) {
+        throw new Error('Sync cancelled');
+      }
+    };
+
     state.isSyncing = true;
     const errors: string[] = [];
     let usersAdded = 0;
@@ -231,7 +247,21 @@ export class SyncEngine {
     let logsAdded = 0;
     let logsDeduplicated = 0;
 
+    // Shared details object updated throughout the sync
+    const details: NonNullable<SyncProgress['details']> = {
+      startedAt: new Date().toISOString(),
+      totalRecordsFetched: 0,
+      usersTotal: 0,
+      usersProcessed: 0,
+      logsTotal: 0,
+      logsProcessed: 0,
+      summariesTotal: 0,
+      summariesProcessed: 0,
+    };
+
     try {
+      checkAbort();
+
       // Get device configuration
       const device = await getDeviceById(deviceId);
       if (!device) {
@@ -248,10 +278,9 @@ export class SyncEngine {
         syncMode: device.syncMode,
       };
 
-      // Phase 1: Connecting & fetching all data in one go
-      updateProgress(deviceId, 'connecting', 0, 100, 'Connecting to device...', progressCallback);
+      // ── Phase 1: Connect & fetch ──────────────────────────────────────
+      updateProgress(deviceId, 'connecting', 0, 100, 'Connecting to device...', progressCallback, details);
 
-      // Use combined sync-all endpoint to avoid concurrent connection issues
       const logSyncOptions = toAttendanceLogSyncOptions(options);
       const sidecarOptions = logSyncOptions.mode === 'range' && logSyncOptions.startDate && logSyncOptions.endDate
         ? { mode: 'range' as const, startDate: logSyncOptions.startDate, endDate: logSyncOptions.endDate }
@@ -261,20 +290,33 @@ export class SyncEngine {
       let deviceLogs: { deviceUserId: string; timestamp: string; verifyType: number; punchType: number; userName?: string | null }[] = [];
 
       try {
-        updateProgress(deviceId, 'users', 10, 100, 'Fetching users and attendance logs from device...', progressCallback);
+        checkAbort();
+        updateProgress(deviceId, 'fetching', 5, 100, 'Fetching users and attendance logs from device...', progressCallback, details);
         const syncResult = await this.deviceCommunication.syncAll(config, sidecarOptions);
         deviceUsers = syncResult.users;
         deviceLogs = syncResult.logs;
+
+        details.usersTotal = deviceUsers.length;
+        details.logsTotal = deviceLogs.length;
+        details.totalRecordsFetched = deviceUsers.length + deviceLogs.length;
+
         console.log(`[SyncEngine] Received ${deviceUsers.length} users and ${deviceLogs.length} logs from device`);
+
+        updateProgress(
+          deviceId, 'fetching', 15, 100,
+          `Fetched ${deviceUsers.length} users and ${deviceLogs.length} logs from device`,
+          progressCallback, details
+        );
       } catch (error) {
+        if (abortSignal?.aborted) throw new Error('Sync cancelled');
         const errMsg = error instanceof Error ? error.message : String(error);
         errors.push(`Device sync error: ${errMsg}`);
       }
 
-      // Phase 2: Process users
-      // Each phase handles its own atomicity to avoid holding long write locks
-      // which cause "database is locked" errors in SQLite
-      updateProgress(deviceId, 'users', 30, 100, 'Processing users...', progressCallback);
+      // ── Phase 2: Process users ────────────────────────────────────────
+      checkAbort();
+      await yieldToUI();
+      updateProgress(deviceId, 'users', 20, 100, `Processing ${deviceUsers.length} users...`, progressCallback, details);
       
       let syncedAt = new Date().toISOString();
 
@@ -285,9 +327,10 @@ export class SyncEngine {
           .map(u => u.deviceUserId as string)
       );
 
-      // Transform and insert new users (each insert is independent)
       const totalNewUsers = deviceUsers.length;
       for (let i = 0; i < totalNewUsers; i++) {
+        if (i % 10 === 0) checkAbort();
+
         const deviceUser = deviceUsers[i];
         if (!deviceUser) continue;
         
@@ -300,6 +343,7 @@ export class SyncEngine {
 
         if (existingDeviceUserIds.has(deviceUser.deviceUserId)) {
           usersSynced++;
+          details.usersProcessed = usersAdded + usersSynced;
           continue;
         }
 
@@ -315,24 +359,25 @@ export class SyncEngine {
           }
         }
         
+        details.usersProcessed = usersAdded + usersSynced;
+
         // Yield every 10 users so the UI can re-render and other CRUD works
         if (i % 10 === 0) {
           await yieldToUI();
           updateProgress(
-            deviceId, 
-            'processing', 
-            30 + Math.floor((i / totalNewUsers) * 10), 
-            100, 
-            `Creating users (${i + 1}/${totalNewUsers})...`,
-            progressCallback
+            deviceId, 'users',
+            20 + Math.floor(((i + 1) / totalNewUsers) * 10),
+            100,
+            `Users: ${details.usersProcessed} / ${totalNewUsers}`,
+            progressCallback, details
           );
         }
       }
 
-      // Phase 3: Insert attendance logs
-      // insertLogs() manages its own SAVEPOINT for batch atomicity and yields between batches
+      // ── Phase 3: Insert attendance logs ───────────────────────────────
+      checkAbort();
       await yieldToUI();
-      updateProgress(deviceId, 'processing', 40, 100, 'Inserting attendance logs...', progressCallback);
+      updateProgress(deviceId, 'logs', 30, 100, `Inserting ${deviceLogs.length} attendance logs...`, progressCallback, details);
       
       if (deviceLogs.length > 0) {
         const logsToInsert = deviceLogs.map(log => ({
@@ -345,21 +390,35 @@ export class SyncEngine {
         }));
         
         try {
-          const insertResult = await insertLogs(logsToInsert);
+          const insertResult = await insertLogs(logsToInsert, (processed, total) => {
+            // Per-batch progress callback from insertLogs
+            details.logsProcessed = processed;
+            updateProgress(
+              deviceId, 'logs',
+              30 + Math.floor((processed / total) * 30),
+              100,
+              `Logs: ${processed.toLocaleString()} / ${total.toLocaleString()}`,
+              progressCallback, details
+            );
+          }, abortSignal);
           logsAdded = insertResult.inserted;
           logsDeduplicated = insertResult.duplicates;
+          details.logsProcessed = logsToInsert.length;
         } catch (error) {
+          if (abortSignal?.aborted) throw new Error('Sync cancelled');
           errors.push(`Failed to insert logs: ${error instanceof Error ? error.message : String(error)}`);
         }
       }
 
-      // Phase 4: Generate daily summaries from raw logs
+      // ── Phase 4: Generate daily summaries ─────────────────────────────
+      checkAbort();
       await yieldToUI();
-      updateProgress(deviceId, 'processing', 60, 100, 'Generating attendance summaries...', progressCallback);
+      updateProgress(deviceId, 'processing', 60, 100, 'Generating attendance summaries...', progressCallback, details);
       
       try {
-        await this.generateSummariesFromLogs(deviceId, progressCallback);
+        await this.generateSummariesFromLogs(deviceId, progressCallback, details, abortSignal);
       } catch (error) {
+        if (abortSignal?.aborted) throw new Error('Sync cancelled');
         errors.push(`Failed to generate summaries: ${error instanceof Error ? error.message : String(error)}`);
       }
 
@@ -372,8 +431,8 @@ export class SyncEngine {
         errors.push(`Failed to update sync timestamp: ${error instanceof Error ? error.message : String(error)}`);
       }
 
-      // Phase 5: Complete
-      updateProgress(deviceId, 'complete', 100, 100, 'Sync complete!', progressCallback);
+      // ── Phase 5: Complete ─────────────────────────────────────────────
+      updateProgress(deviceId, 'complete', 100, 100, 'Sync complete!', progressCallback, details);
 
       return {
         success: errors.length === 0,
@@ -418,7 +477,9 @@ export class SyncEngine {
    */
   async generateSummariesFromLogs(
     deviceId: string,
-    progressCallback?: SyncProgressCallback
+    progressCallback?: SyncProgressCallback,
+    details?: NonNullable<SyncProgress['details']>,
+    abortSignal?: AbortSignal
   ): Promise<void> {
     // Get all users
     const users = await listUsers({ status: 'all' });
@@ -546,7 +607,15 @@ export class SyncEngine {
     const entries = Array.from(userDateLogs.entries());
     const SUMMARY_BATCH_SIZE = 50;
 
+    if (details) {
+      details.summariesTotal = total;
+      details.summariesProcessed = 0;
+    }
+
     for (let batchStart = 0; batchStart < entries.length; batchStart += SUMMARY_BATCH_SIZE) {
+      // Check cancellation between batches
+      if (abortSignal?.aborted) throw new Error('Sync cancelled');
+
       const batch = entries.slice(batchStart, batchStart + SUMMARY_BATCH_SIZE);
       
       // Wrap each batch in a savepoint for performance
@@ -599,14 +668,19 @@ export class SyncEngine {
       // Yield to event loop so UI stays responsive and other DB operations can interleave
       await yieldToUI();
 
+      if (details) {
+        details.summariesProcessed = processed;
+      }
+
       if (progressCallback) {
         updateProgress(
           deviceId,
           'processing',
           60 + Math.floor((processed / total) * 35),
           100,
-          `Processing summaries (${processed}/${total})...`,
-          progressCallback
+          `Summaries: ${processed.toLocaleString()} / ${total.toLocaleString()}`,
+          progressCallback,
+          details
         );
       }
     }

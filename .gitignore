@@ -33,6 +33,9 @@ horus-attendance/src-tauri/gen/schemas/
 # Sidecar build
 horus-attendance/sidecar/dist/
 
+# Scratch / experiments
+horus-attendance/scratch/
+
 # Generated
 *.d.ts.map
 horus-attendance/vite.config.d.ts

@@ -61,10 +61,21 @@ export interface SyncStatus {
 }
 
 export interface SyncProgress {
-  phase: 'connecting' | 'users' | 'logs' | 'processing' | 'complete';
+  phase: 'connecting' | 'fetching' | 'users' | 'logs' | 'processing' | 'complete';
   current: number;
   total: number;
   message: string;
+  /** Detailed record counts for granular progress */
+  details?: {
+    totalRecordsFetched?: number;
+    usersTotal?: number;
+    usersProcessed?: number;
+    logsTotal?: number;
+    logsProcessed?: number;
+    summariesTotal?: number;
+    summariesProcessed?: number;
+    startedAt?: string;
+  };
 }
 
 export interface SyncEngine {

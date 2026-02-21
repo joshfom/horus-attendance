@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { AppProvider, useApp } from './contexts';
+import { AppProvider, useApp, SyncProvider } from './contexts';
 import { AppShell } from './components/layout';
 import { Notification, LoadingScreen, ErrorScreen, ErrorBoundary } from './components';
 import {
@@ -30,7 +30,7 @@ function AppContent() {
   }
 
   return (
-    <>
+    <SyncProvider>
       <Notification />
       <BrowserRouter>
         <Routes>
@@ -47,7 +47,7 @@ function AppContent() {
           </Route>
         </Routes>
       </BrowserRouter>
-    </>
+    </SyncProvider>
   );
 }
 

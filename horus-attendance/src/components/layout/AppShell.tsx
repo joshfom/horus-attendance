@@ -1,6 +1,7 @@
 import { Outlet, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Sidebar } from './Sidebar';
+import { SyncProgressPanel } from './SyncProgressPanel';
 
 const pageVariants = {
   initial: {
@@ -45,6 +46,8 @@ export function AppShell() {
           </motion.div>
         </AnimatePresence>
       </main>
+      {/* Floating sync progress — visible on all pages except /sync */}
+      <SyncProgressPanel />
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { motion } from 'framer-motion';
+import { useSync } from '../../contexts';
 
 interface NavItem {
   path: string;
@@ -75,6 +76,11 @@ const navItems: NavItem[] = [
 ];
 
 export function Sidebar() {
+  const { isSyncing, activeSync } = useSync();
+  const syncPercentage = activeSync
+    ? Math.round((activeSync.progress.current / activeSync.progress.total) * 100)
+    : 0;
+
   return (
     <motion.aside
       initial={{ x: -20, opacity: 0 }}
@@ -115,6 +121,17 @@ export function Sidebar() {
             >
               {item.icon}
               <span className="font-medium">{item.label}</span>
+              {/* Show sync indicator badge on the Sync nav item */}
+              {item.path === '/sync' && isSyncing && (
+                <span className="ml-auto flex items-center gap-1 px-2 py-0.5 bg-primary-600/20 text-primary-400 text-xs rounded-full">
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 1.5, repeat: Infinity, ease: 'linear' }}
+                    className="w-2.5 h-2.5 border border-primary-400 border-t-transparent rounded-full"
+                  />
+                  {syncPercentage}%
+                </span>
+              )}
             </NavLink>
           </motion.div>
         ))}
