@@ -104,8 +104,9 @@ export async function insertLog(log: {
 
 /**
  * Bulk insert attendance logs with deduplication
- * Uses a single transaction for performance (avoids 3 SQL round-trips per log)
- * Supports userName for user matching
+ * Uses a transaction for performance and atomicity.
+ * Processes in batches to avoid holding write locks too long.
+ * Supports userName for user matching.
  */
 export async function insertLogs(logs: Array<{
   deviceId: string;
@@ -120,19 +121,21 @@ export async function insertLogs(logs: Array<{
     return { inserted: 0, duplicates: 0 };
   }
 
-  // Wrap in a savepoint for performance (compatible with parent transactions)
-  await execute('SAVEPOINT insert_logs');
-
   let inserted = 0;
   let duplicates = 0;
 
-  try {
-    // Use batch size to avoid excessively large SQL statements
-    const BATCH_SIZE = 50;
+  // Process in batches — each batch is its own transaction to avoid
+  // holding long write locks that cause "database is locked" errors.
+  const BATCH_SIZE = 100;
 
-    for (let batchStart = 0; batchStart < logs.length; batchStart += BATCH_SIZE) {
-      const batch = logs.slice(batchStart, batchStart + BATCH_SIZE);
+  for (let batchStart = 0; batchStart < logs.length; batchStart += BATCH_SIZE) {
+    const batch = logs.slice(batchStart, batchStart + BATCH_SIZE);
 
+    // Each batch gets its own savepoint for atomicity
+    const savepointName = `insert_logs_${batchStart}`;
+    await execute(`SAVEPOINT ${savepointName}`);
+
+    try {
       for (const log of batch) {
         const id = generateId();
         const createdAt = now();
@@ -164,12 +167,14 @@ export async function insertLogs(logs: Array<{
           duplicates++;
         }
       }
-    }
 
-    await execute('RELEASE SAVEPOINT insert_logs');
-  } catch (error) {
-    await execute('ROLLBACK TO SAVEPOINT insert_logs').catch(() => {});
-    throw error;
+      await execute(`RELEASE SAVEPOINT ${savepointName}`);
+    } catch (error) {
+      await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
+      // Log the batch error but continue with remaining batches
+      console.error(`[insertLogs] Batch starting at ${batchStart} failed:`, error);
+      throw error;
+    }
   }
 
   return { inserted, duplicates };

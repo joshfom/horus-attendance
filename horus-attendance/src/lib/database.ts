@@ -12,6 +12,10 @@ export async function initDatabase(): Promise<Database> {
   }
   
   db = await Database.load('sqlite:horus_attendance.db');
+  // Enable WAL mode for concurrent read/write access (prevents "database is locked" errors)
+  await db.execute('PRAGMA journal_mode = WAL');
+  // Set busy timeout to 10 seconds — retry on lock instead of failing immediately
+  await db.execute('PRAGMA busy_timeout = 10000');
   // Enable foreign key enforcement (SQLite has it off by default)
   await db.execute('PRAGMA foreign_keys = ON');
   return db;

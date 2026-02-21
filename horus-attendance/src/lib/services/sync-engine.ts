@@ -271,21 +271,21 @@ export class SyncEngine {
         errors.push(`Device sync error: ${errMsg}`);
       }
 
-      // Phase 2: Process users (wrapped in transaction for atomicity)
+      // Phase 2: Process users
+      // Each phase handles its own atomicity to avoid holding long write locks
+      // which cause "database is locked" errors in SQLite
       updateProgress(deviceId, 'users', 30, 100, 'Processing users...', progressCallback);
       
       let syncedAt = new Date().toISOString();
-      await beginTransaction();
 
-      try {
-        const existingUsers = await listUsers({ status: 'all' });
+      const existingUsers = await listUsers({ status: 'all' });
       const existingDeviceUserIds = new Set(
         existingUsers
           .filter(u => u.deviceUserId)
           .map(u => u.deviceUserId as string)
       );
 
-      // Transform and insert new users
+      // Transform and insert new users (each insert is independent)
       const totalNewUsers = deviceUsers.length;
       for (let i = 0; i < totalNewUsers; i++) {
         const deviceUser = deviceUsers[i];
@@ -328,6 +328,7 @@ export class SyncEngine {
       }
 
       // Phase 3: Insert attendance logs
+      // insertLogs() manages its own SAVEPOINT for batch atomicity
       updateProgress(deviceId, 'processing', 40, 100, 'Inserting attendance logs...', progressCallback);
       
       if (deviceLogs.length > 0) {
@@ -365,15 +366,6 @@ export class SyncEngine {
         state.lastSyncAt = syncedAt;
       } catch (error) {
         errors.push(`Failed to update sync timestamp: ${error instanceof Error ? error.message : String(error)}`);
-      }
-
-      // Commit the transaction wrapping user/log/summary inserts
-      await commitTransaction();
-      } catch (txError) {
-        // Rollback on any database failure
-        await rollbackTransaction().catch(() => {});
-        const txMsg = txError instanceof Error ? txError.message : String(txError);
-        errors.push(`Sync transaction failed: ${txMsg}`);
       }
 
       // Phase 5: Complete
@@ -543,45 +535,64 @@ export class SyncEngine {
       console.log(`[SyncEngine] Unmatched device_user_ids (sample): ${sample.join(', ')}`);
     }
 
-    // Process each user+date combination
+    // Process each user+date combination in batched transactions
+    // to avoid both slow auto-commits and long-held locks
     let processed = 0;
     const total = userDateLogs.size;
+    const entries = Array.from(userDateLogs.entries());
+    const SUMMARY_BATCH_SIZE = 50;
 
-    for (const [key, { user, logs: dateLogs }] of userDateLogs) {
-      const date = key.split('|')[1] as string;
+    for (let batchStart = 0; batchStart < entries.length; batchStart += SUMMARY_BATCH_SIZE) {
+      const batch = entries.slice(batchStart, batchStart + SUMMARY_BATCH_SIZE);
       
+      // Wrap each batch in a savepoint for performance
+      const savepointName = `summaries_${batchStart}`;
       try {
-        const punches: PunchRecord[] = dateLogs.map(log => ({
-          id: log.id,
-          userId: user.id,
-          deviceId: log.device_id,
-          deviceUserId: log.device_user_id,
-          timestamp: log.timestamp,
-          punchType: log.punch_type ?? 0,
-          verifyType: log.verify_type ?? 0,
-          createdAt: log.created_at,
-        }));
+        await execute(`SAVEPOINT ${savepointName}`);
+        
+        for (const [key, { user, logs: dateLogs }] of batch) {
+          const date = key.split('|')[1] as string;
+          
+          try {
+            const punches: PunchRecord[] = dateLogs.map(log => ({
+              id: log.id,
+              userId: user.id,
+              deviceId: log.device_id,
+              deviceUserId: log.device_user_id,
+              timestamp: log.timestamp,
+              punchType: log.punch_type ?? 0,
+              verifyType: log.verify_type ?? 0,
+              createdAt: log.created_at,
+            }));
 
-        const isHoliday = holidays.has(date);
-        const summary = processDay(user.id, date, punches, rules, isHoliday);
+            const isHoliday = holidays.has(date);
+            const summary = processDay(user.id, date, punches, rules, isHoliday);
 
-        await upsertSummary({
-          userId: user.id,
-          date: date,
-          checkInTime: summary.checkInTime,
-          checkOutTime: summary.checkOutTime,
-          isIncomplete: summary.isIncomplete,
-          lateMinutes: summary.lateMinutes,
-          earlyMinutes: summary.earlyMinutes,
-          status: summary.status,
-          flags: summary.flags,
-        });
-      } catch (error) {
-        console.error(`[SyncEngine] Error processing ${user.displayName} on ${date}:`, error);
+            await upsertSummary({
+              userId: user.id,
+              date: date,
+              checkInTime: summary.checkInTime,
+              checkOutTime: summary.checkOutTime,
+              isIncomplete: summary.isIncomplete,
+              lateMinutes: summary.lateMinutes,
+              earlyMinutes: summary.earlyMinutes,
+              status: summary.status,
+              flags: summary.flags,
+            });
+          } catch (error) {
+            console.error(`[SyncEngine] Error processing ${user.displayName} on ${date}:`, error);
+          }
+
+          processed++;
+        }
+        
+        await execute(`RELEASE SAVEPOINT ${savepointName}`);
+      } catch (batchError) {
+        await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
+        console.error(`[SyncEngine] Summary batch failed at offset ${batchStart}:`, batchError);
       }
 
-      processed++;
-      if (progressCallback && processed % 50 === 0) {
+      if (progressCallback) {
         updateProgress(
           deviceId,
           'processing',

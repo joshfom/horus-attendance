@@ -446,14 +446,14 @@ export function exportMonthlyReportToCSV(report: MonthlyReportRow[]): string {
   const dayLabels = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
   // Horizontal layout matching weekly: one row per employee, day columns as In/Out pairs
-  const headers: string[] = ['Employee Name', 'Employee Code'];
+  const headers: string[] = ['Employee Name', 'Employee Code', 'Department'];
   for (const d of report[0]!.dailyDetails) {
     const dt = new Date(d.date);
     const dayLabel = dayLabels[dt.getDay()] || '';
     const dd = dt.getDate();
     headers.push(`${dayLabel} ${dd} In`, `${dayLabel} ${dd} Out`);
   }
-  headers.push('Days Present', 'Days Absent', 'Late Minutes', 'Early Minutes');
+  headers.push('Days Present', 'Days Absent', 'Total Working Days', 'Attendance %', 'Late Minutes', 'Early Minutes', 'Incomplete Days');
 
   const rows: string[] = [headers.map(escapeCSVValue).join(',')];
 
@@ -469,12 +469,13 @@ export function exportMonthlyReportToCSV(report: MonthlyReportRow[]): string {
     const dataRow: (string | number)[] = [
       row.user.displayName,
       row.user.employeeCode || '',
+      (row.user as { departmentName?: string }).departmentName || '',
     ];
     for (const day of row.dailyDetails) {
       dataRow.push(day.status === 'weekend' ? 'Weekend' : day.status === 'holiday' ? 'Holiday' : fmtTime(day.checkIn));
       dataRow.push(day.status === 'weekend' ? '' : day.status === 'holiday' ? '' : fmtTime(day.checkOut));
     }
-    dataRow.push(row.summary.daysPresent, row.summary.daysAbsent, row.summary.totalLateMinutes, row.summary.totalEarlyMinutes);
+    dataRow.push(row.summary.daysPresent, row.summary.daysAbsent, row.summary.totalWorkingDays, row.summary.attendancePercentage, row.summary.totalLateMinutes, row.summary.totalEarlyMinutes, row.summary.incompleteDays);
     rows.push(dataRow.map(escapeCSVValue).join(','));
   }
 
