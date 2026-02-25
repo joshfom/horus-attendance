@@ -53,6 +53,8 @@ export function parseTimeToMinutes(time: string): number {
 
 /**
  * Extract time (HH:mm) from ISO timestamp
+ * Uses local time methods because device timestamps encode local time
+ * (ZKTeco parseZKTime uses the local Date constructor).
  */
 export function extractTimeFromTimestamp(timestamp: string): string {
   const date = new Date(timestamp);
@@ -63,6 +65,8 @@ export function extractTimeFromTimestamp(timestamp: string): string {
 
 /**
  * Extract date (YYYY-MM-DD) from ISO timestamp
+ * Uses local time methods because device timestamps encode local time
+ * (ZKTeco parseZKTime uses the local Date constructor).
  */
 export function extractDateFromTimestamp(timestamp: string): string {
   const date = new Date(timestamp);
@@ -151,10 +155,17 @@ export function calculateEarlyMinutes(
 
 /**
  * Check if a date is a workday based on rules
+ * Parses YYYY-MM-DD string directly to avoid timezone conversion issues.
  */
 export function isWorkday(date: string, rules: AttendanceRules): boolean {
-  const dateObj = new Date(date);
-  const dayOfWeek = dateObj.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  // Parse YYYY-MM-DD directly as UTC to avoid local timezone shifting the day
+  const parts = date.split('-');
+  const dateObj = new Date(Date.UTC(
+    parseInt(parts[0] ?? '2000', 10),
+    parseInt(parts[1] ?? '1', 10) - 1,
+    parseInt(parts[2] ?? '1', 10)
+  ));
+  const dayOfWeek = dateObj.getUTCDay(); // 0 = Sunday, 1 = Monday, etc.
   return rules.workdays.includes(dayOfWeek);
 }
 

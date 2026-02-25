@@ -113,6 +113,7 @@ pub fn decode_tcp_header(data: &[u8]) -> (PacketHeader, u16) {
 }
 
 /// Create a UDP packet: 8-byte header + data
+/// NOTE: reply_id is written as-is. Callers are responsible for incrementing.
 pub fn create_udp_header(command: u16, session_id: u16, reply_id: u16, data: &[u8]) -> Vec<u8> {
     let mut buf = vec![0u8; 8 + data.len()];
     buf[0..2].copy_from_slice(&command.to_le_bytes());
@@ -121,17 +122,15 @@ pub fn create_udp_header(command: u16, session_id: u16, reply_id: u16, data: &[u
     buf[6..8].copy_from_slice(&reply_id.to_le_bytes());
     buf[8..].copy_from_slice(data);
 
+    // Compute checksum over the final packet contents (reply_id already set)
     let chksum = create_checksum(&buf);
     buf[2..4].copy_from_slice(&chksum.to_le_bytes());
-
-    // Increment reply_id in the packet (matches node-zklib behavior)
-    let next_reply = (reply_id.wrapping_add(1)) % (USHRT_MAX as u16);
-    buf[6..8].copy_from_slice(&next_reply.to_le_bytes());
 
     buf
 }
 
 /// Create a TCP packet: 8-byte TCP prefix + 8-byte header + data
+/// NOTE: reply_id is written as-is. Callers are responsible for incrementing.
 pub fn create_tcp_header(command: u16, session_id: u16, reply_id: u16, data: &[u8]) -> Vec<u8> {
     // Build the inner 8+data portion (same as UDP header)
     let mut inner = vec![0u8; 8 + data.len()];
@@ -140,11 +139,9 @@ pub fn create_tcp_header(command: u16, session_id: u16, reply_id: u16, data: &[u
     inner[6..8].copy_from_slice(&reply_id.to_le_bytes());
     inner[8..].copy_from_slice(data);
 
+    // Compute checksum over the final packet contents (reply_id already set)
     let chksum = create_checksum(&inner);
     inner[2..4].copy_from_slice(&chksum.to_le_bytes());
-
-    let next_reply = (reply_id.wrapping_add(1)) % (USHRT_MAX as u16);
-    inner[6..8].copy_from_slice(&next_reply.to_le_bytes());
 
     // Build the 8-byte TCP prefix
     let mut prefix = vec![0x50u8, 0x50, 0x82, 0x7d, 0x00, 0x00, 0x00, 0x00];

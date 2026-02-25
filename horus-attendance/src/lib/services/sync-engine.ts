@@ -528,10 +528,21 @@ export class SyncEngine {
         byDeviceUserId.set(user.deviceUserId, user);
       }
       if (user.deviceName) {
-        byDeviceName.set(user.deviceName.toLowerCase(), user);
+        const nameKey = user.deviceName.toLowerCase();
+        // Only set if no collision — first user wins to prevent silent misattribution
+        if (!byDeviceName.has(nameKey)) {
+          byDeviceName.set(nameKey, user);
+        } else {
+          console.warn(`[SyncEngine] Duplicate device_name (case-insensitive): "${user.deviceName}" — skipping map entry for user ${user.id}`);
+        }
       }
       if (user.displayName) {
-        byDisplayName.set(user.displayName.toLowerCase(), user);
+        const displayKey = user.displayName.toLowerCase();
+        if (!byDisplayName.has(displayKey)) {
+          byDisplayName.set(displayKey, user);
+        } else {
+          console.warn(`[SyncEngine] Duplicate display_name (case-insensitive): "${user.displayName}" — skipping map entry for user ${user.id}`);
+        }
       }
     }
     
