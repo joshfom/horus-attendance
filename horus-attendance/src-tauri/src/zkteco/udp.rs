@@ -181,13 +181,7 @@ impl ZKUdp {
                 }
 
                 // Receive chunks
-                // Scale timeout with data size: base 60s + 30s per chunk
-                let chunk_timeout_secs = 60 + (total_packets as u64 * 30);
-                log::info!(
-                    "[zkteco] UDP: expecting {} bytes in {} chunks, timeout {}s",
-                    size, total_packets, chunk_timeout_secs
-                );
-                let chunk_timeout = Duration::from_secs(chunk_timeout_secs);
+                let chunk_timeout = Duration::from_secs(30);
                 let deadline = tokio::time::Instant::now() + chunk_timeout;
 
                 while total_buffer.len() < size {

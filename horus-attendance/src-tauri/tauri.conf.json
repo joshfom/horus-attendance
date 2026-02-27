@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Horus Attendance",
-  "version": "0.2.8",
+  "version": "0.3.0",
   "identifier": "com.horus.attendance",
   "build": {
     "frontendDist": "../dist",
@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-    "version": "0.2.9",
+      {
         "title": "Horus Attendance",
         "width": 1200,
         "height": 800,
