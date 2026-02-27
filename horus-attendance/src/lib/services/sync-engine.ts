@@ -10,7 +10,7 @@ import { execute, select, yieldToUI } from '../database';
 import { getDeviceCommunicationService, type DeviceError } from './device-communication';
 import { getDeviceById, updateLastSyncAt } from '../repositories/device.repository';
 import { createUser, listUsers } from '../repositories/user.repository';
-import { insertLogs } from '../repositories/attendance-log.repository';
+import { insertLogs, getLatestLogTimestamp } from '../repositories/attendance-log.repository';
 import { processDay, DEFAULT_ATTENDANCE_RULES } from './rule-engine';
 import { settingsRepository } from '../repositories/settings.repository';
 import { holidayRepository } from '../repositories/holiday.repository';
@@ -285,6 +285,21 @@ export class SyncEngine {
         ? { mode: 'range' as const, startDate: logSyncOptions.startDate, endDate: logSyncOptions.endDate }
         : { mode: 'all' as const };
 
+      // For "latest" mode, look up the last synced timestamp and set a cutoff
+      // 2 days before it. After fetching, we filter client-side.
+      let latestCutoffDate: string | null = null;
+      if (logSyncOptions.mode === 'latest') {
+        const lastTimestamp = await getLatestLogTimestamp(deviceId);
+        if (lastTimestamp) {
+          const cutoff = new Date(lastTimestamp);
+          cutoff.setDate(cutoff.getDate() - 2); // 2 days back for safety
+          latestCutoffDate = cutoff.toISOString().split('T')[0] as string;
+          console.log(`[SyncEngine] Latest mode: last record ${lastTimestamp}, cutoff ${latestCutoffDate}`);
+        } else {
+          console.log('[SyncEngine] Latest mode: no existing records, fetching all');
+        }
+      }
+
       let deviceUsers: { deviceUserId: string; deviceName: string }[] = [];
       let deviceLogs: { deviceUserId: string; timestamp: string; verifyType: number; punchType: number; userName?: string | null }[] = [];
 
@@ -295,15 +310,26 @@ export class SyncEngine {
         deviceUsers = syncResult.users;
         deviceLogs = syncResult.logs;
 
+        const totalFetched = deviceLogs.length;
+
+        // If "latest" mode with a cutoff, drop records older than the cutoff
+        if (latestCutoffDate && deviceLogs.length > 0) {
+          deviceLogs = deviceLogs.filter(log => {
+            const logDate = log.timestamp.split('T')[0] ?? '';
+            return logDate >= latestCutoffDate!;
+          });
+          console.log(`[SyncEngine] Latest filter: ${totalFetched} → ${deviceLogs.length} logs (from ${latestCutoffDate})`);
+        }
+
         details.usersTotal = deviceUsers.length;
         details.logsTotal = deviceLogs.length;
-        details.totalRecordsFetched = deviceUsers.length + deviceLogs.length;
+        details.totalRecordsFetched = deviceUsers.length + totalFetched;
 
-        console.log(`[SyncEngine] Received ${deviceUsers.length} users and ${deviceLogs.length} logs from device`);
+        console.log(`[SyncEngine] Received ${deviceUsers.length} users and ${totalFetched} logs (processing ${deviceLogs.length})`);
 
         updateProgress(
           deviceId, 'fetching', 15, 100,
-          `Fetched ${deviceUsers.length} users and ${deviceLogs.length} logs from device`,
+          `Fetched ${deviceUsers.length} users and ${totalFetched} logs (processing ${deviceLogs.length})`,
           progressCallback, details
         );
       } catch (error) {

@@ -214,6 +214,20 @@ export async function insertLogs(
 }
 
 /**
+ * Get the latest (most recent) attendance log timestamp for a device.
+ * Used by "Latest" sync mode to determine the cutoff for incremental sync.
+ * Returns null if no logs exist for the device.
+ */
+export async function getLatestLogTimestamp(deviceId: string): Promise<string | null> {
+  const rows = await select<{ max_ts: string | null }>(
+    `SELECT MAX(timestamp) as max_ts FROM attendance_logs_raw WHERE device_id = ?`,
+    [deviceId]
+  );
+  if (rows.length === 0 || !rows[0]?.max_ts) return null;
+  return rows[0].max_ts;
+}
+
+/**
  * Get attendance log by ID
  */
 export async function getLogById(id: string): Promise<AttendanceLog | null> {

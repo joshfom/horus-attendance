@@ -201,7 +201,14 @@ impl ZKTcp {
                 }
 
                 // Receive all chunk responses
-                let chunk_timeout = Duration::from_secs(30);
+                // Scale timeout with data size: base 60s + 30s per chunk.
+                // For 11k records (~464KB, ~8 chunks) this gives ~300s.
+                let chunk_timeout_secs = 60 + (total_packets as u64 * 30);
+                log::info!(
+                    "[zkteco] TCP: expecting {} bytes in {} chunks, timeout {}s",
+                    size, total_packets, chunk_timeout_secs
+                );
+                let chunk_timeout = Duration::from_secs(chunk_timeout_secs);
                 let deadline = tokio::time::Instant::now() + chunk_timeout;
 
                 while packets_remaining > 0 {
