@@ -200,17 +200,6 @@ async fn export_backup(app: tauri::AppHandle, destination: Option<String>) -> Re
     fs::copy(&db_path, &backup_path)
         .map_err(|e| format!("Failed to copy database: {}", e))?;
     
-    // Also copy WAL and SHM files if they exist to capture uncommitted data
-    let db_path_str = db_path.to_string_lossy();
-    let backup_path_str = backup_path.to_string_lossy();
-    for suffix in &["-wal", "-shm"] {
-        let src = PathBuf::from(format!("{}{}", db_path_str, suffix));
-        if src.exists() {
-            let dst = PathBuf::from(format!("{}{}", backup_path_str, suffix));
-            let _ = fs::copy(&src, &dst); // Best-effort
-        }
-    }
-    
     let file_size = fs::metadata(&backup_path)
         .map(|m| m.len())
         .unwrap_or(0);
@@ -250,23 +239,6 @@ async fn restore_backup(app: tauri::AppHandle, backup_path: String) -> Result<Re
     // Copy the backup file to the database location
     fs::copy(&source_path, &db_path)
         .map_err(|e| format!("Failed to restore database: {}", e))?;
-    
-    // Remove stale WAL/SHM files that belong to the OLD database
-    let db_path_str = db_path.to_string_lossy();
-    for suffix in &["-wal", "-shm"] {
-        let sidecar = PathBuf::from(format!("{}{}", db_path_str, suffix));
-        let _ = fs::remove_file(&sidecar);
-    }
-    
-    // Copy WAL/SHM from the backup source if they exist
-    let source_str = source_path.to_string_lossy();
-    for suffix in &["-wal", "-shm"] {
-        let src = PathBuf::from(format!("{}{}", source_str, suffix));
-        if src.exists() {
-            let dst = PathBuf::from(format!("{}{}", db_path_str, suffix));
-            let _ = fs::copy(&src, &dst);
-        }
-    }
     
     Ok(RestoreResult {
         success: true,
@@ -340,13 +312,6 @@ async fn reset_database(app: tauri::AppHandle) -> Result<RestoreResult, String> 
             success: false,
             error: Some(format!("Failed to delete database: {}", e)),
         });
-    }
-    
-    // Also remove WAL and SHM sidecar files
-    let db_path_str = db_path.to_string_lossy();
-    for suffix in &["-wal", "-shm"] {
-        let sidecar = PathBuf::from(format!("{}{}", db_path_str, suffix));
-        let _ = fs::remove_file(&sidecar);
     }
     
     Ok(RestoreResult {

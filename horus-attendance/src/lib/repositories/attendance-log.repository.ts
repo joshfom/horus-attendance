@@ -247,11 +247,11 @@ export async function listLogs(
   sort?: { field: AttendanceRecordSortField; direction: SortDirection }
 ): Promise<AttendanceLog[]> {
   let query = `
-    SELECT DISTINCT l.* FROM attendance_logs_raw l
+    SELECT l.* FROM attendance_logs_raw l
     LEFT JOIN users u ON (
       l.device_user_id = u.device_user_id
-      OR (u.device_user_id IS NULL AND LOWER(l.device_user_id) = LOWER(u.device_name))
-      OR (u.device_user_id IS NULL AND u.device_name IS NULL AND LOWER(l.device_user_id) = LOWER(u.display_name))
+      OR LOWER(l.device_user_id) = LOWER(u.device_name)
+      OR LOWER(l.device_user_id) = LOWER(u.display_name)
     )
     LEFT JOIN departments d ON u.department_id = d.id
     WHERE 1=1

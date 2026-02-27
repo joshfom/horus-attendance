@@ -11,7 +11,7 @@
   },
   "app": {
     "windows": [
-      {
+    "version": "0.2.9",
         "title": "Horus Attendance",
         "width": 1200,
         "height": 800,

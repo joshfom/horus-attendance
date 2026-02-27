@@ -264,12 +264,10 @@ impl ZKTcp {
                         };
 
                         if real_total_buffer.len() >= expected_size {
-                            if expected_size > 8 {
-                                // Only take up to expected_size, keep overflow for next packet
-                                reply_data.extend_from_slice(&real_total_buffer[8..expected_size]);
+                            if real_total_buffer.len() > 8 {
+                                reply_data.extend_from_slice(&real_total_buffer[8..]);
                             }
-                            // Preserve any overflow bytes for the next packet
-                            real_total_buffer = real_total_buffer[expected_size..].to_vec();
+                            real_total_buffer.clear();
                             packets_remaining -= 1;
                         }
                     }
