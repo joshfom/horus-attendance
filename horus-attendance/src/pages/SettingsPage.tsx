@@ -1,11 +1,13 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useEffect, useCallback } from 'react';
-import type { AppSettings, AttendanceRules, Holiday, CreateHolidayInput, ExportSettings } from '../types/models';
+import type { AppSettings, AttendanceRules, Holiday, CreateHolidayInput, ExportSettings, TimezoneSettings } from '../types/models';
 import { settingsRepository } from '../lib/repositories/settings.repository';
 import { holidayRepository } from '../lib/repositories/holiday.repository';
 import { exportBackup, restoreBackup, selectBackupFile, selectBackupDestination, isTauriEnvironment, formatFileSize, resetDatabase } from '../lib/tauri-commands';
 import { useApp } from '../contexts';
 import { ConfirmDialog } from '../components/ui';
+import { TIMEZONE_OPTIONS } from '../lib/utils/timezone';
+import { invalidateTimezoneCache } from '../lib/hooks/useTimezone';
 
 // Animation variants
 const containerVariants = {
@@ -719,6 +721,84 @@ function AppearanceSection({ theme, onChange, onSave, saving }: AppearanceSectio
 }
 
 
+// Timezone Settings Section
+interface TimezoneSectionProps {
+  settings: TimezoneSettings;
+  onChange: (settings: TimezoneSettings) => void;
+  onSave: () => void;
+  saving: boolean;
+}
+
+function TimezoneSection({ settings, onChange, onSave, saving }: TimezoneSectionProps) {
+  return (
+    <motion.div variants={cardVariants} className="card">
+      <SectionHeader
+        title="Timezone & Time Display"
+        description="Configure timezone for attendance records and reports"
+      />
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-secondary-300 mb-1">Timezone</label>
+          <select
+            value={settings.timezone}
+            onChange={(e) => onChange({ ...settings, timezone: e.target.value })}
+            className="input w-full"
+          >
+            {TIMEZONE_OPTIONS.map((tz) => (
+              <option key={tz.value} value={tz.value}>{tz.label}</option>
+            ))}
+          </select>
+          <p className="text-xs text-secondary-500 mt-1">
+            This should match the timezone configured on your ZKTeco device
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-secondary-300 mb-2">Time Format</label>
+          <div className="flex gap-2">
+            {(['24h', '12h'] as const).map((fmt) => (
+              <button
+                key={fmt}
+                onClick={() => onChange({ ...settings, timeFormat: fmt })}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  settings.timeFormat === fmt
+                    ? 'bg-primary-600 text-white'
+                    : 'bg-secondary-700 text-secondary-300 hover:bg-secondary-600'
+                }`}
+              >
+                {fmt === '24h' ? '24-hour (14:30)' : '12-hour (2:30 PM)'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="pt-4 border-t border-secondary-700">
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
+            onClick={onSave}
+            disabled={saving}
+            className="btn-primary flex items-center gap-2"
+          >
+            {saving ? (
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1, repeat: Infinity, ease: 'linear' }}
+                className="w-4 h-4 border-2 border-white border-t-transparent rounded-full"
+              />
+            ) : (
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            )}
+            Save Timezone Settings
+          </motion.button>
+        </div>
+      </div>
+    </motion.div>
+  );
+}
+
 // Main Settings Page Component
 // Export Settings Section
 interface ExportSettingsSectionProps {
@@ -836,6 +916,7 @@ export function SettingsPage() {
   const [savingRules, setSavingRules] = useState(false);
   const [savingAppearance, setSavingAppearance] = useState(false);
   const [savingExport, setSavingExport] = useState(false);
+  const [savingTimezone, setSavingTimezone] = useState(false);
 
   // Load settings and holidays
   const loadData = useCallback(async () => {
@@ -903,6 +984,22 @@ export function SettingsPage() {
       showNotification('Failed to save export settings', 'error');
     } finally {
       setSavingExport(false);
+    }
+  };
+
+  // Save timezone settings
+  const handleSaveTimezone = async () => {
+    if (!settings) return;
+    setSavingTimezone(true);
+    try {
+      await settingsRepository.updateAppSettings({ timezone: settings.timezone });
+      invalidateTimezoneCache();
+      showNotification('Timezone settings saved successfully', 'success');
+    } catch (error) {
+      console.error('Failed to save timezone settings:', error);
+      showNotification('Failed to save timezone settings', 'error');
+    } finally {
+      setSavingTimezone(false);
     }
   };
 
@@ -1023,6 +1120,14 @@ export function SettingsPage() {
             saving={savingRules}
           />
         </div>
+
+        {/* Timezone Settings */}
+        <TimezoneSection
+          settings={settings.timezone}
+          onChange={(timezone) => setSettings({ ...settings, timezone })}
+          onSave={handleSaveTimezone}
+          saving={savingTimezone}
+        />
 
         {/* Holidays */}
         <HolidaysSection

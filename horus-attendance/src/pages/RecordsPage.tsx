@@ -10,6 +10,8 @@ import { userRepository } from '../lib/repositories/user.repository';
 import { departmentRepository } from '../lib/repositories/department.repository';
 import { useApp } from '../contexts';
 import { useDebounce } from '../lib/hooks/useDebounce';
+import { useTimezone } from '../lib/hooks/useTimezone';
+import { formatTime } from '../lib/utils/timezone';
 
 // Animation variants
 const containerVariants = {
@@ -86,6 +88,7 @@ export function RecordsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { showNotification } = useApp();
+  const tz = useTimezone();
   
   // Data state
   const [records, setRecords] = useState<AttendanceLog[]>([]);
@@ -244,11 +247,12 @@ export function RecordsPage() {
       // Build CSV content
       const headers = ['Date', 'Time', 'User', 'Device User ID', 'Department', 'Verify Type', 'Punch Type'];
       const rows = allRecords.map(record => {
-        const dt = new Date(record.timestamp);
+        const raw = record.timestamp.replace(/Z$/, '');
+        const dt = new Date(raw);
         const user = resolveUser(record.deviceUserId);
         return [
           dt.toLocaleDateString('en-US', { year: 'numeric', month: '2-digit', day: '2-digit' }),
-          dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
+          `${dt.getHours().toString().padStart(2, '0')}:${dt.getMinutes().toString().padStart(2, '0')}:${dt.getSeconds().toString().padStart(2, '0')}`,
           user?.displayName || record.deviceUserId,
           record.deviceUserId,
           user?.departmentId ? departments.find(d => d.id === user.departmentId)?.name || '-' : '-',
@@ -321,10 +325,11 @@ export function RecordsPage() {
 
   // Format timestamp for display
   const formatTimestamp = (timestamp: string): { date: string; time: string } => {
-    const dt = new Date(timestamp);
+    const raw = timestamp.replace(/Z$/, '');
+    const dt = new Date(raw);
     return {
       date: dt.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }),
-      time: dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+      time: formatTime(timestamp, tz, { seconds: true }),
     };
   };
 

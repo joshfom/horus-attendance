@@ -55,7 +55,9 @@ export function parseTimeToMinutes(time: string): number {
  * Extract time (HH:mm) from ISO timestamp
  */
 export function extractTimeFromTimestamp(timestamp: string): string {
-  const date = new Date(timestamp);
+  // Strip Z suffix — device timestamps are local time tagged as UTC
+  const raw = timestamp.replace(/Z$/, '');
+  const date = new Date(raw);
   const hours = date.getHours().toString().padStart(2, '0');
   const minutes = date.getMinutes().toString().padStart(2, '0');
   return `${hours}:${minutes}`;

@@ -2,6 +2,8 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useApp } from '../contexts';
+import { useTimezone } from '../lib/hooks/useTimezone';
+import { formatDateTime } from '../lib/utils/timezone';
 
 // Animation variants for staggered card animations
 const containerVariants = {
@@ -114,6 +116,7 @@ function formatLastSync(lastSyncAt: string | null): string {
 export function DashboardPage() {
   const navigate = useNavigate();
   const { dashboardStats: stats, refreshDashboard } = useApp();
+  const tz = useTimezone();
 
   // Refresh dashboard on mount
   React.useEffect(() => {
@@ -153,7 +156,7 @@ export function DashboardPage() {
         <StatCard
           title="Last Sync"
           value={formatLastSync(stats?.lastSyncAt ?? null)}
-          subtitle={stats?.lastSyncAt ? new Date(stats.lastSyncAt).toLocaleString() : 'No sync yet'}
+          subtitle={stats?.lastSyncAt ? formatDateTime(stats.lastSyncAt, tz) : 'No sync yet'}
           color="primary"
           onClick={() => navigate('/sync')}
           icon={

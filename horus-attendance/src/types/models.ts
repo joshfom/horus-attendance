@@ -258,6 +258,13 @@ export interface ExportSettings {
   };
 }
 
+export interface TimezoneSettings {
+  /** IANA timezone identifier, e.g. 'Asia/Dubai' */
+  timezone: string;
+  /** Display format for times: 12h or 24h */
+  timeFormat: '12h' | '24h';
+}
+
 export interface AppSettings {
   device: DeviceConfig | null;
   attendance: AttendanceRules;
@@ -265,6 +272,7 @@ export interface AppSettings {
   appearance: AppearanceSettings;
   backup: BackupSettings;
   export: ExportSettings;
+  timezone: TimezoneSettings;
 }
 
 // ============================================================================

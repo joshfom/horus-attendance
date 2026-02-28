@@ -31,6 +31,7 @@ export type {
   BackupSettings,
   AppSettings,
   ExportSettings,
+  TimezoneSettings,
   Holiday,
   CreateHolidayInput,
 } from './models';

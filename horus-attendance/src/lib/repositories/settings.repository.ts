@@ -6,7 +6,7 @@
  */
 
 import { execute, select } from '../database';
-import type { AppSettings, AttendanceRules, AppearanceSettings, BackupSettings, ExportSettings, DeviceConfig } from '../../types/models';
+import type { AppSettings, AttendanceRules, AppearanceSettings, BackupSettings, ExportSettings, DeviceConfig, TimezoneSettings } from '../../types/models';
 
 // Default attendance rules
 export const DEFAULT_ATTENDANCE_RULES: AttendanceRules = {
@@ -46,6 +46,11 @@ export const DEFAULT_EXPORT_SETTINGS: ExportSettings = {
   },
 };
 
+export const DEFAULT_TIMEZONE_SETTINGS: TimezoneSettings = {
+  timezone: 'Asia/Dubai',
+  timeFormat: '24h',
+};
+
 // Default app settings
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   device: null,
@@ -54,6 +59,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   appearance: DEFAULT_APPEARANCE_SETTINGS,
   backup: DEFAULT_BACKUP_SETTINGS,
   export: DEFAULT_EXPORT_SETTINGS,
+  timezone: DEFAULT_TIMEZONE_SETTINGS,
 };
 
 interface SettingsRow extends Record<string, unknown> {
@@ -130,13 +136,14 @@ export async function setTypedSetting<T>(key: string, value: T): Promise<void> {
  * Get full app settings
  */
 export async function getAppSettings(): Promise<AppSettings> {
-  const [device, attendance, holidays, appearance, backup, exportSettings] = await Promise.all([
+  const [device, attendance, holidays, appearance, backup, exportSettings, timezone] = await Promise.all([
     getTypedSetting<DeviceConfig | null>('device', DEFAULT_APP_SETTINGS.device),
     getTypedSetting<AttendanceRules>('attendance', DEFAULT_APP_SETTINGS.attendance),
     getTypedSetting<string[]>('holidays', DEFAULT_APP_SETTINGS.holidays),
     getTypedSetting<AppearanceSettings>('appearance', DEFAULT_APP_SETTINGS.appearance),
     getTypedSetting<BackupSettings>('backup', DEFAULT_APP_SETTINGS.backup),
     getTypedSetting<ExportSettings>('exportSettings', DEFAULT_APP_SETTINGS.export),
+    getTypedSetting<TimezoneSettings>('timezone', DEFAULT_APP_SETTINGS.timezone),
   ]);
 
   return {
@@ -146,6 +153,7 @@ export async function getAppSettings(): Promise<AppSettings> {
     appearance,
     backup,
     export: exportSettings,
+    timezone,
   };
 }
 
@@ -173,6 +181,9 @@ export async function updateAppSettings(settings: Partial<AppSettings>): Promise
   if (settings.export !== undefined) {
     updates.push(setTypedSetting('exportSettings', settings.export));
   }
+  if (settings.timezone !== undefined) {
+    updates.push(setTypedSetting('timezone', settings.timezone));
+  }
 
   await Promise.all(updates);
   return getAppSettings();
@@ -189,6 +200,7 @@ export async function resetToDefaults(): Promise<AppSettings> {
     setTypedSetting('appearance', DEFAULT_APP_SETTINGS.appearance),
     setTypedSetting('backup', DEFAULT_APP_SETTINGS.backup),
     setTypedSetting('exportSettings', DEFAULT_APP_SETTINGS.export),
+    setTypedSetting('timezone', DEFAULT_APP_SETTINGS.timezone),
   ]);
   return DEFAULT_APP_SETTINGS;
 }
@@ -207,5 +219,6 @@ export const settingsRepository = {
   DEFAULT_ATTENDANCE_RULES,
   DEFAULT_APPEARANCE_SETTINGS,
   DEFAULT_BACKUP_SETTINGS,
+  DEFAULT_TIMEZONE_SETTINGS,
   DEFAULT_APP_SETTINGS,
 };

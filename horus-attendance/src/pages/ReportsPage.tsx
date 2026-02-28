@@ -93,9 +93,13 @@ function formatTime(time: string | null): string {
   if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(time)) {
     return time.substring(0, 5);
   }
-  const dt = new Date(time);
+  // Strip Z suffix — device timestamps are local time tagged as UTC
+  const raw = time.replace(/Z$/, '');
+  const dt = new Date(raw);
   if (isNaN(dt.getTime())) return '--:--';
-  return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const hh = dt.getHours().toString().padStart(2, '0');
+  const mm = dt.getMinutes().toString().padStart(2, '0');
+  return `${hh}:${mm}`;
 }
 
 // Day Cell Component for Weekly Report

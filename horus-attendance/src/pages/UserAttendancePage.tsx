@@ -112,9 +112,12 @@ function DayCard({ date, summary, isToday }: { date: Date; summary: DailySummary
   const formatTime = (time: string | null): string => {
     if (!time) return '--:--';
     if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(time)) return time.substring(0, 5);
-    const dt = new Date(time);
+    const raw = time.replace(/Z$/, '');
+    const dt = new Date(raw);
     if (isNaN(dt.getTime())) return '--:--';
-    return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const hh = dt.getHours().toString().padStart(2, '0');
+    const mm = dt.getMinutes().toString().padStart(2, '0');
+    return `${hh}:${mm}`;
   };
 
   return (
@@ -565,9 +568,12 @@ export function UserAttendancePage() {
                     const formatTime = (time: string | null): string => {
                       if (!time) return '--:--';
                       if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(time)) return time.substring(0, 5);
-                      const dt = new Date(time);
+                      const raw = time.replace(/Z$/, '');
+                      const dt = new Date(raw);
                       if (isNaN(dt.getTime())) return '--:--';
-                      return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+                      const hh = dt.getHours().toString().padStart(2, '0');
+                      const mm = dt.getMinutes().toString().padStart(2, '0');
+                      return `${hh}:${mm}`;
                     };
                     
                     return (

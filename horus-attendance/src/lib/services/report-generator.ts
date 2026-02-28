@@ -409,9 +409,12 @@ export function exportWeeklyReportToCSV(report: WeeklyReportRow[]): string {
   const fmtTime = (t: string | null): string => {
     if (!t) return '';
     if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(t)) return t.substring(0, 5);
-    const dt = new Date(t);
+    const raw = t.replace(/Z$/, '');
+    const dt = new Date(raw);
     if (isNaN(dt.getTime())) return '';
-    return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const hh = dt.getHours().toString().padStart(2, '0');
+    const mm = dt.getMinutes().toString().padStart(2, '0');
+    return `${hh}:${mm}`;
   };
 
   for (const row of report) {
@@ -460,9 +463,12 @@ export function exportMonthlyReportToCSV(report: MonthlyReportRow[]): string {
   const fmtTime = (t: string | null): string => {
     if (!t) return '';
     if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(t)) return t.substring(0, 5);
-    const dt = new Date(t);
+    const raw = t.replace(/Z$/, '');
+    const dt = new Date(raw);
     if (isNaN(dt.getTime())) return '';
-    return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const hh = dt.getHours().toString().padStart(2, '0');
+    const mm = dt.getMinutes().toString().padStart(2, '0');
+    return `${hh}:${mm}`;
   };
 
   for (const row of report) {
@@ -575,9 +581,13 @@ function timeToMinutes(t: string): number {
 function fmtTime(t: string | null): string {
   if (!t) return '';
   if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(t)) return t.substring(0, 5);
-  const dt = new Date(t);
+  // Strip Z suffix — device timestamps are local time tagged as UTC
+  const raw = t.replace(/Z$/, '');
+  const dt = new Date(raw);
   if (isNaN(dt.getTime())) return '';
-  return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const hh = dt.getHours().toString().padStart(2, '0');
+  const mm = dt.getMinutes().toString().padStart(2, '0');
+  return `${hh}:${mm}`;
 }
 
 /** Convert hex color like #C6EFCE to ARGB like FFC6EFCE */
