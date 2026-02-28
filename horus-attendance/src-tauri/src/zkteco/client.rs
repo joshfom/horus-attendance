@@ -24,15 +24,16 @@ impl ZKClient {
     pub async fn connect(config: &DeviceConfig) -> Result<Self, String> {
         let ip = &config.ip;
         let port = config.port;
-        let timeout_ms = config.timeout.unwrap_or(10000);
+        let timeout_ms = config.timeout.unwrap_or(30000);
         let comm_key: u32 = config.comm_key.as_deref()
             .unwrap_or("0")
             .parse()
             .unwrap_or(0);
 
         // Try TCP first
-        log::info!("[zkteco] Attempting TCP connection to {}:{}", ip, port);
+        log::info!("[zkteco] Attempting TCP connection to {}:{} (timeout {}ms)", ip, port, timeout_ms);
         let mut tcp = ZKTcp::new(ip, port, timeout_ms);
+        let tcp_error: String;
         match tcp.connect().await {
             Ok(()) => {
                 // Authenticate if comm_key is set
@@ -51,6 +52,7 @@ impl ZKClient {
             }
             Err(e) => {
                 log::warn!("[zkteco] TCP failed ({}), trying UDP...", e);
+                tcp_error = e;
                 let _ = tcp.disconnect().await;
             }
         }
@@ -74,10 +76,14 @@ impl ZKClient {
                     transport: Some(Transport::Udp(udp)),
                 })
             }
-            Err(e) => Err(format!(
-                "Failed to connect to device {}:{} - TCP and UDP both failed: {}",
-                ip, port, e
-            )),
+            Err(udp_error) => {
+                // Include both TCP and UDP errors for better diagnostics
+                let combined = format!(
+                    "Failed to connect to device {}:{} — TCP: {} | UDP: {}",
+                    ip, port, tcp_error, udp_error
+                );
+                Err(format_error(&combined))
+            }
         }
     }
 
@@ -191,15 +197,25 @@ impl ZKClient {
         if let Some(opts) = options {
             if opts.mode == "range" {
                 if let (Some(start), Some(end)) = (&opts.start_date, &opts.end_date) {
-                    let start_str = start.clone();
-                    let end_str = end.clone();
+                    // Ensure start_str begins at midnight and end_str covers the full end day.
+                    // Without the "T23:59:59" suffix, records ON the end date are excluded
+                    // because "2026-02-28T09:00:00" > "2026-02-28" in string comparison.
+                    let start_str = if start.contains('T') {
+                        start.clone()
+                    } else {
+                        format!("{}T00:00:00", start)
+                    };
+                    let end_str = if end.contains('T') {
+                        end.clone()
+                    } else {
+                        format!("{}T23:59:59", end)
+                    };
                     logs.retain(|log| {
-                        // Simple string comparison works for ISO date format
                         log.timestamp >= start_str && log.timestamp <= end_str
                     });
                     log::info!(
-                        "[zkteco] After date filter: {} records remain",
-                        logs.len()
+                        "[zkteco] After date filter ({} to {}): {} records remain",
+                        start_str, end_str, logs.len()
                     );
                 }
             }
@@ -228,15 +244,42 @@ impl ZKClient {
         // Disconnect and reconnect for attendance logs
         // (device needs a fresh connection, mirrors sidecar behavior)
         let _ = client.disconnect().await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-        let mut client = Self::connect(config).await?;
+        // Retry reconnection up to 3 times with increasing delays.
+        // ZKTeco devices are slow to release the TCP socket after disconnect.
+        let mut logs = Vec::new();
+        let mut last_err = String::new();
+        for attempt in 0..3 {
+            let delay_ms = 500 + (attempt as u64 * 500); // 500ms, 1000ms, 1500ms
+            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
 
-        // Get attendance logs
-        let logs = client.get_attendance_logs(options).await?;
-        log::info!("[zkteco] Got {} attendance logs", logs.len());
+            match Self::connect(config).await {
+                Ok(mut reconnected) => {
+                    match reconnected.get_attendance_logs(options).await {
+                        Ok(fetched) => {
+                            log::info!("[zkteco] Got {} attendance logs (attempt {})", fetched.len(), attempt + 1);
+                            logs = fetched;
+                            let _ = reconnected.disconnect().await;
+                            last_err.clear();
+                            break;
+                        }
+                        Err(e) => {
+                            log::warn!("[zkteco] get_attendance_logs failed on attempt {}: {}", attempt + 1, e);
+                            last_err = e;
+                            let _ = reconnected.disconnect().await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[zkteco] Reconnect attempt {} failed: {}", attempt + 1, e);
+                    last_err = e;
+                }
+            }
+        }
 
-        let _ = client.disconnect().await;
+        if !last_err.is_empty() && logs.is_empty() {
+            return Err(format!("Got {} users but failed to fetch attendance logs: {}", users.len(), last_err));
+        }
 
         Ok(SyncAllResult { users, logs })
     }
@@ -255,18 +298,34 @@ impl ZKClient {
 fn format_error(error: &str) -> String {
     let lower = error.to_lowercase();
 
+    // Device unreachable — common on macOS when ARP/ICMP fails
+    if lower.contains("no route to host")
+        || lower.contains("ehostunreach")
+        || lower.contains("host unreachable")
+        || lower.contains("broken pipe")
+        || lower.contains("os error 32")
+        || lower.contains("os error 65")
+    {
+        return format!(
+            "Device is unreachable — make sure the ZKTeco device is powered on, \
+             connected to the network, and on the same subnet as this computer. \
+             ({})",
+            error
+        );
+    }
     if lower.contains("timeout") || lower.contains("etimedout") {
-        return "Connection timeout - device may be unreachable or IP/port incorrect".to_string();
+        return format!(
+            "Connection timeout — the device did not respond in time. \
+             It may be off, unreachable, or the IP/port may be wrong. ({})",
+            error
+        );
     }
     if lower.contains("econnrefused") || lower.contains("connection refused") {
-        return "Connection refused - check if device is powered on and network accessible"
+        return "Connection refused — check if device is powered on and network accessible"
             .to_string();
     }
-    if lower.contains("ehostunreach") || lower.contains("host unreachable") {
-        return "Host unreachable - check network configuration".to_string();
-    }
     if lower.contains("auth") || lower.contains("password") {
-        return "Authentication failed - check communication key".to_string();
+        return "Authentication failed — check communication key".to_string();
     }
 
     error.to_string()

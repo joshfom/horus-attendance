@@ -110,14 +110,15 @@ pub async fn sync_device_all(
         config.port
     );
 
-    // Retry up to 2 times on transient connection failures
-    let max_retries = 2;
+    // Retry up to 3 times on transient connection failures, with increasing backoff
+    let max_retries = 3;
     let mut last_error = String::new();
 
     for attempt in 0..=max_retries {
         if attempt > 0 {
-            log::info!("[zkteco::cmd] Retry attempt {} for sync_device_all", attempt);
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let delay_secs = attempt as u64 * 2; // 2s, 4s, 6s
+            log::info!("[zkteco::cmd] Retry attempt {} for sync_device_all (waiting {}s)", attempt, delay_secs);
+            tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
         }
 
         match ZKClient::sync_all(&config, options.as_ref()).await {

@@ -92,8 +92,8 @@ impl ZKUdp {
             .await
             .map_err(|e| format!("UDP send failed: {}", e))?;
 
-        let is_connect = command == cmd::CMD_CONNECT || command == cmd::CMD_EXIT;
-        let dur = Duration::from_millis(if is_connect { 2000 } else { self.timeout_ms });
+        // Use full timeout for all commands — high-latency devices need more than 2s
+        let dur = Duration::from_millis(self.timeout_ms);
 
         let mut resp_buf = vec![0u8; 65536];
         let n = timeout(dur, socket.recv(&mut resp_buf))

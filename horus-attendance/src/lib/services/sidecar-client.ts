@@ -50,7 +50,7 @@ function toDeviceConfig(config: DeviceConfig): SidecarDeviceConfig {
     ip: config.ip,
     port: config.port,
     commKey: config.commKey || undefined,
-    timeout: 15000,
+    timeout: 30000,
   };
 }
 

@@ -102,6 +102,7 @@ fn get_migrations() -> Vec<Migration> {
                 CREATE INDEX IF NOT EXISTS idx_users_device_user_id ON users(device_user_id);
                 CREATE INDEX IF NOT EXISTS idx_attendance_logs_timestamp ON attendance_logs_raw(timestamp);
                 CREATE INDEX IF NOT EXISTS idx_attendance_logs_device_user ON attendance_logs_raw(device_user_id);
+                CREATE INDEX IF NOT EXISTS idx_attendance_logs_device_ts ON attendance_logs_raw(device_id, timestamp);
                 CREATE INDEX IF NOT EXISTS idx_attendance_summary_date ON attendance_day_summary(date);
                 CREATE INDEX IF NOT EXISTS idx_attendance_summary_user_date ON attendance_day_summary(user_id, date);
             "#,

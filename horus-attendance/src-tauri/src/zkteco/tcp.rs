@@ -35,7 +35,8 @@ impl ZKTcp {
     /// Connect TCP socket and send CMD_CONNECT
     pub async fn connect(&mut self) -> Result<(), String> {
         let addr = format!("{}:{}", self.ip, self.port);
-        let dur = Duration::from_millis(self.timeout_ms.min(5000));
+        // Use full timeout for connect — high-latency devices may need >5s for TCP handshake
+        let dur = Duration::from_millis(self.timeout_ms);
 
         let stream = timeout(dur, TcpStream::connect(&addr))
             .await
@@ -90,8 +91,8 @@ impl ZKTcp {
             .await
             .map_err(|e| format!("TCP write failed: {}", e))?;
 
-        let is_connect = command == cmd::CMD_CONNECT || command == cmd::CMD_EXIT;
-        let dur = Duration::from_millis(if is_connect { 2000 } else { self.timeout_ms });
+        // Use full timeout for all commands — high-latency devices need more than 2s
+        let dur = Duration::from_millis(self.timeout_ms);
 
         let mut resp_buf = vec![0u8; 65536];
         let n = timeout(dur, stream.read(&mut resp_buf))

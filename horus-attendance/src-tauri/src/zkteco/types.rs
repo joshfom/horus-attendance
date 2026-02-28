@@ -20,7 +20,7 @@ fn default_port() -> u16 {
 }
 
 fn default_timeout() -> Option<u64> {
-    Some(10000)
+    Some(30000)
 }
 
 /// Device information

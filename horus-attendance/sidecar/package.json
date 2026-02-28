@@ -7,7 +7,9 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "diagnose": "tsx src/diagnose.ts",
+    "postinstall": "node patches/patch-node-zklib.js"
   },
   "dependencies": {
     "node-zklib": "^1.0.0",

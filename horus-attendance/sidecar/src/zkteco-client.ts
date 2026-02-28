@@ -39,7 +39,7 @@ export class ZKTecoClient {
       ip: config.ip,
       port: config.port || 4370,
       commKey: config.commKey || '',
-      timeout: config.timeout || 10000,
+      timeout: config.timeout || 30000,
     };
   }
 

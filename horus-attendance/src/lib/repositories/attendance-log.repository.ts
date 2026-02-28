@@ -151,9 +151,14 @@ export async function insertLogs(
 
     // Each batch gets its own savepoint for atomicity
     const savepointName = `insert_logs_${batchStart}`;
-    await execute(`SAVEPOINT ${savepointName}`);
+
+    // Track counters before this batch so we can restore on rollback
+    const insertedBefore = inserted;
+    const duplicatesBefore = duplicates;
 
     try {
+      await execute(`SAVEPOINT ${savepointName}`);
+
       // Process the batch in multi-row INSERT chunks
       for (let i = 0; i < batch.length; i += ROWS_PER_INSERT) {
         const chunk = batch.slice(i, i + ROWS_PER_INSERT);
@@ -200,10 +205,14 @@ export async function insertLogs(
 
       await execute(`RELEASE SAVEPOINT ${savepointName}`);
     } catch (error) {
+      // Restore counters since the batch was rolled back
+      inserted = insertedBefore;
+      duplicates = duplicatesBefore;
       await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
       await execute(`RELEASE SAVEPOINT ${savepointName}`).catch(() => {});
       // Log the batch error but continue with remaining batches
-      console.error(`[insertLogs] Batch starting at ${batchStart} failed:`, error);
+      const errMsg = error instanceof Error ? error.message : String(error);
+      console.error(`[insertLogs] Batch starting at ${batchStart} failed (${batch.length} rows):`, errMsg);
     }
 
     // Yield to event loop between batches so UI stays responsive

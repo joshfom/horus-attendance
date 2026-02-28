@@ -281,23 +281,33 @@ export class SyncEngine {
       updateProgress(deviceId, 'connecting', 0, 100, 'Connecting to device...', progressCallback, details);
 
       const logSyncOptions = toAttendanceLogSyncOptions(options);
-      const sidecarOptions = logSyncOptions.mode === 'range' && logSyncOptions.startDate && logSyncOptions.endDate
-        ? { mode: 'range' as const, startDate: logSyncOptions.startDate, endDate: logSyncOptions.endDate }
-        : { mode: 'all' as const };
 
-      // For "latest" mode, look up the last synced timestamp and set a cutoff
-      // 2 days before it. After fetching, we filter client-side.
-      let latestCutoffDate: string | null = null;
+      // The ZKTeco protocol always returns ALL records from the device regardless
+      // of any date filter we send. Filtering must happen client-side after fetch.
+      // We always request mode:'all' from the device and filter ourselves.
+      const sidecarOptions = { mode: 'all' as const };
+
+      // Determine the client-side filter window based on sync mode.
+      // filterStartDate / filterEndDate define which records we actually keep.
+      let filterStartDate: string | null = null;
+      let filterEndDate: string | null = null;
+
       if (logSyncOptions.mode === 'latest') {
+        // "Latest" mode: only records newer than what's already in DB (2-day overlap for safety)
         const lastTimestamp = await getLatestLogTimestamp(deviceId);
         if (lastTimestamp) {
           const cutoff = new Date(lastTimestamp);
-          cutoff.setDate(cutoff.getDate() - 2); // 2 days back for safety
-          latestCutoffDate = cutoff.toISOString().split('T')[0] as string;
-          console.log(`[SyncEngine] Latest mode: last record ${lastTimestamp}, cutoff ${latestCutoffDate}`);
+          cutoff.setDate(cutoff.getDate() - 2);
+          filterStartDate = cutoff.toISOString().split('T')[0] as string;
+          console.log(`[SyncEngine] Latest mode: last record ${lastTimestamp}, filter from ${filterStartDate}`);
         } else {
-          console.log('[SyncEngine] Latest mode: no existing records, fetching all');
+          console.log('[SyncEngine] Latest mode: no existing records, will process all');
         }
+      } else if (logSyncOptions.mode === 'range' && logSyncOptions.startDate && logSyncOptions.endDate) {
+        // "Date Range" / "Last N Days" mode: only records in the requested window
+        filterStartDate = logSyncOptions.startDate;
+        filterEndDate = logSyncOptions.endDate;
+        console.log(`[SyncEngine] Range mode: filter ${filterStartDate} to ${filterEndDate}`);
       }
 
       let deviceUsers: { deviceUserId: string; deviceName: string }[] = [];
@@ -305,31 +315,63 @@ export class SyncEngine {
 
       try {
         checkAbort();
-        updateProgress(deviceId, 'fetching', 5, 100, 'Fetching users and attendance logs from device...', progressCallback, details);
-        const syncResult = await this.deviceCommunication.syncAll(config, sidecarOptions);
-        deviceUsers = syncResult.users;
-        deviceLogs = syncResult.logs;
+        updateProgress(deviceId, 'fetching', 5, 100, 'Fetching data from device...', progressCallback, details);
+
+        // Try combined sync first; fall back to separate fetches on failure.
+        let syncError: string | null = null;
+        try {
+          const syncResult = await this.deviceCommunication.syncAll(config, sidecarOptions);
+          deviceUsers = syncResult.users;
+          deviceLogs = syncResult.logs;
+        } catch (combinedError) {
+          syncError = combinedError instanceof Error ? combinedError.message : String(combinedError);
+          console.warn(`[SyncEngine] Combined sync failed: ${syncError}. Trying separate fetches...`);
+          updateProgress(deviceId, 'fetching', 7, 100, 'Retrying with separate fetches...', progressCallback, details);
+        }
+
+        // Fallback: fetch users and logs in separate calls
+        if (syncError && !abortSignal?.aborted) {
+          try {
+            deviceUsers = await this.deviceCommunication.getUsers(config);
+            console.log(`[SyncEngine] Separate fetch: got ${deviceUsers.length} users`);
+          } catch (userError) {
+            const msg = userError instanceof Error ? userError.message : String(userError);
+            errors.push(`Failed to fetch users: ${msg}`);
+          }
+          checkAbort();
+          try {
+            deviceLogs = await this.deviceCommunication.getAttendanceLogs(config, sidecarOptions);
+            console.log(`[SyncEngine] Separate fetch: got ${deviceLogs.length} logs`);
+          } catch (logError) {
+            const msg = logError instanceof Error ? logError.message : String(logError);
+            errors.push(`Failed to fetch attendance logs: ${msg}`);
+          }
+        }
 
         const totalFetched = deviceLogs.length;
 
-        // If "latest" mode with a cutoff, drop records older than the cutoff
-        if (latestCutoffDate && deviceLogs.length > 0) {
+        // ── Client-side date filter ──
+        // Apply the date window BEFORE any DB work so we never waste time on
+        // records outside the requested range.
+        if ((filterStartDate || filterEndDate) && deviceLogs.length > 0) {
           deviceLogs = deviceLogs.filter(log => {
             const logDate = log.timestamp.split('T')[0] ?? '';
-            return logDate >= latestCutoffDate!;
+            if (filterStartDate && logDate < filterStartDate) return false;
+            if (filterEndDate && logDate > filterEndDate) return false;
+            return true;
           });
-          console.log(`[SyncEngine] Latest filter: ${totalFetched} → ${deviceLogs.length} logs (from ${latestCutoffDate})`);
+          console.log(`[SyncEngine] Date filter: ${totalFetched} → ${deviceLogs.length} logs`);
         }
 
         details.usersTotal = deviceUsers.length;
         details.logsTotal = deviceLogs.length;
         details.totalRecordsFetched = deviceUsers.length + totalFetched;
 
-        console.log(`[SyncEngine] Received ${deviceUsers.length} users and ${totalFetched} logs (processing ${deviceLogs.length})`);
+        console.log(`[SyncEngine] Received ${deviceUsers.length} users and ${totalFetched} total logs (${deviceLogs.length} after filter)`);
 
         updateProgress(
           deviceId, 'fetching', 15, 100,
-          `Fetched ${deviceUsers.length} users and ${totalFetched} logs (processing ${deviceLogs.length})`,
+          `Fetched ${deviceUsers.length} users, ${deviceLogs.length} logs to process`,
           progressCallback, details
         );
       } catch (error) {
@@ -404,47 +446,96 @@ export class SyncEngine {
       await yieldToUI();
       updateProgress(deviceId, 'logs', 30, 100, `Inserting ${deviceLogs.length} attendance logs...`, progressCallback, details);
       
+      // Collect unique dates from the device logs for scoped summary generation
+      const syncedDates = new Set<string>();
+
       if (deviceLogs.length > 0) {
-        const logsToInsert = deviceLogs.map(log => ({
-          deviceId: config.id,
-          deviceUserId: log.deviceUserId,
-          timestamp: log.timestamp,
-          verifyType: log.verifyType,
-          punchType: log.punchType,
-          userName: log.userName || null,
-        }));
-        
+        // ── Optimization: skip records already in DB ──
+        // Query the latest existing timestamp for this device. Records at or before
+        // this timestamp are almost certainly duplicates, so we only INSERT the tail.
+        // This turns a 20-minute full-table dedup into a sub-second operation for
+        // incremental syncs.
+        let logsToProcess = deviceLogs;
         try {
-          const insertResult = await insertLogs(logsToInsert, (processed, total) => {
-            // Per-batch progress callback from insertLogs
-            details.logsProcessed = processed;
-            updateProgress(
-              deviceId, 'logs',
-              30 + Math.floor((processed / total) * 30),
-              100,
-              `Logs: ${processed.toLocaleString()} / ${total.toLocaleString()}`,
-              progressCallback, details
-            );
-          }, abortSignal);
-          logsAdded = insertResult.inserted;
-          logsDeduplicated = insertResult.duplicates;
-          details.logsProcessed = logsToInsert.length;
-        } catch (error) {
-          if (abortSignal?.aborted) throw new Error('Sync cancelled');
-          errors.push(`Failed to insert logs: ${error instanceof Error ? error.message : String(error)}`);
+          const latestExisting = await getLatestLogTimestamp(config.id);
+          if (latestExisting) {
+            const newLogs = deviceLogs.filter(log => log.timestamp > latestExisting);
+            const skipped = deviceLogs.length - newLogs.length;
+            if (skipped > 0) {
+              console.log(`[SyncEngine] Pre-filter: skipping ${skipped} records at or before ${latestExisting}`);
+              logsDeduplicated += skipped;
+              logsToProcess = newLogs;
+            }
+          }
+        } catch (err) {
+          console.warn('[SyncEngine] Could not query latest timestamp, inserting all records');
+        }
+
+        const logsToInsert = logsToProcess.map(log => {
+          const date = log.timestamp.split('T')[0];
+          if (date) syncedDates.add(date);
+          return {
+            deviceId: config.id,
+            deviceUserId: log.deviceUserId,
+            timestamp: log.timestamp,
+            verifyType: log.verifyType,
+            punchType: log.punchType,
+            userName: log.userName || null,
+          };
+        });
+
+        if (logsToInsert.length > 0) {
+          try {
+            console.log(`[SyncEngine] Inserting ${logsToInsert.length} new logs (${logsDeduplicated} pre-filtered as duplicates)...`);
+            const insertResult = await insertLogs(logsToInsert, (processed, total) => {
+              details.logsProcessed = logsDeduplicated + processed;
+              updateProgress(
+                deviceId, 'logs',
+                30 + Math.floor((processed / total) * 30),
+                100,
+                `Inserting: ${processed.toLocaleString()} / ${total.toLocaleString()} new records`,
+                progressCallback, details
+              );
+            }, abortSignal);
+            logsAdded = insertResult.inserted;
+            logsDeduplicated += insertResult.duplicates;
+            details.logsProcessed = deviceLogs.length;
+            console.log(`[SyncEngine] Insert complete: ${logsAdded} new, ${logsDeduplicated} total duplicates`);
+          } catch (error) {
+            if (abortSignal?.aborted) throw new Error('Sync cancelled');
+            const errMsg = error instanceof Error ? error.message : String(error);
+            console.error('[SyncEngine] Failed to insert logs:', errMsg);
+            errors.push(`Failed to insert logs: ${errMsg}`);
+          }
+        } else {
+          console.log(`[SyncEngine] All ${deviceLogs.length} records already in DB, nothing to insert`);
+          details.logsProcessed = deviceLogs.length;
         }
       }
 
       // ── Phase 4: Generate daily summaries ─────────────────────────────
-      checkAbort();
-      await yieldToUI();
-      updateProgress(deviceId, 'processing', 60, 100, 'Generating attendance summaries...', progressCallback, details);
-      
-      try {
-        await this.generateSummariesFromLogs(deviceId, progressCallback, details, abortSignal);
-      } catch (error) {
-        if (abortSignal?.aborted) throw new Error('Sync cancelled');
-        errors.push(`Failed to generate summaries: ${error instanceof Error ? error.message : String(error)}`);
+      // ONLY regenerate summaries if we actually fetched and inserted new data.
+      // When the device fetch fails, syncedDates is empty and there's nothing
+      // new to process — running summaries would just churn through all existing
+      // DB rows for no benefit and confuse the user with large counts.
+      if (syncedDates.size > 0) {
+        checkAbort();
+        await yieldToUI();
+        updateProgress(deviceId, 'processing', 60, 100, 'Generating attendance summaries...', progressCallback, details);
+        
+        try {
+          const datesToProcess = Array.from(syncedDates);
+          console.log(`[SyncEngine] Generating summaries for ${datesToProcess.length} dates...`);
+          await this.generateSummariesFromLogs(deviceId, progressCallback, details, abortSignal, datesToProcess);
+        } catch (error) {
+          if (abortSignal?.aborted) throw new Error('Sync cancelled');
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error('[SyncEngine] Failed to generate summaries:', errMsg);
+          errors.push(`Failed to generate summaries: ${errMsg}`);
+        }
+      } else {
+        console.log('[SyncEngine] No new data synced, skipping summary generation');
+        updateProgress(deviceId, 'processing', 90, 100, 'No new data to summarize', progressCallback, details);
       }
 
       // Update last sync timestamp
@@ -452,12 +543,21 @@ export class SyncEngine {
       try {
         await updateLastSyncAt(deviceId, syncedAt);
         state.lastSyncAt = syncedAt;
+        console.log(`[SyncEngine] Updated last sync timestamp to ${syncedAt}`);
       } catch (error) {
-        errors.push(`Failed to update sync timestamp: ${error instanceof Error ? error.message : String(error)}`);
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error('[SyncEngine] Failed to update sync timestamp:', errMsg);
+        errors.push(`Failed to update sync timestamp: ${errMsg}`);
       }
 
       // ── Phase 5: Complete ─────────────────────────────────────────────
       updateProgress(deviceId, 'complete', 100, 100, 'Sync complete!', progressCallback, details);
+
+      if (errors.length > 0) {
+        console.warn(`[SyncEngine] Sync completed with ${errors.length} error(s):`, errors);
+      } else {
+        console.log(`[SyncEngine] Sync completed successfully: ${logsAdded} logs, ${usersAdded} users added`);
+      }
 
       return {
         success: errors.length === 0,
@@ -499,12 +599,16 @@ export class SyncEngine {
    * The ZKTeco device stores different values in the attendance record's userId field
    * depending on how the user was enrolled - sometimes it's a numeric ID, sometimes
    * it's the user's name. This method handles both cases.
+   * 
+   * @param datesToProcess - If provided, only regenerate summaries for these dates
+   *   (optimisation: avoids re-processing the entire history on every sync)
    */
   async generateSummariesFromLogs(
     deviceId: string,
     progressCallback?: SyncProgressCallback,
     details?: NonNullable<SyncProgress['details']>,
-    abortSignal?: AbortSignal
+    abortSignal?: AbortSignal,
+    datesToProcess?: string[]
   ): Promise<void> {
     // Get all users
     const users = await listUsers({ status: 'all' });
@@ -573,7 +677,22 @@ export class SyncEngine {
       console.log('[SyncEngine] Could not load holidays');
     }
 
-    // Get all raw logs
+    // Get all raw logs (scoped to synced dates if available for performance)
+    let logQuery = `SELECT * FROM attendance_logs_raw WHERE device_id = ?`;
+    const logParams: unknown[] = [deviceId];
+
+    if (datesToProcess && datesToProcess.length > 0) {
+      // Build date range filter: only load logs for the dates we just synced
+      const sortedDates = [...datesToProcess].sort();
+      const minDate = sortedDates[0]!;
+      const maxDate = sortedDates[sortedDates.length - 1]!;
+      logQuery += ` AND timestamp >= ? AND timestamp < ?`;
+      logParams.push(`${minDate}T00:00:00`, `${maxDate}T23:59:59.999Z`);
+      console.log(`[SyncEngine] Querying logs scoped to ${minDate} — ${maxDate} (${datesToProcess.length} dates)`);
+    }
+
+    logQuery += ` ORDER BY timestamp ASC`;
+
     const allLogs = await select<{
       id: string;
       device_id: string;
@@ -583,10 +702,7 @@ export class SyncEngine {
       punch_type: number;
       raw_payload: string | null;
       created_at: string;
-    }>(
-      `SELECT * FROM attendance_logs_raw WHERE device_id = ? ORDER BY timestamp ASC`,
-      [deviceId]
-    );
+    }>(logQuery, logParams);
 
     console.log(`[SyncEngine] Processing ${allLogs.length} raw logs`);
 
@@ -736,9 +852,10 @@ export class SyncEngine {
 
           await execute(`RELEASE SAVEPOINT ${savepointName}`);
         } catch (batchError) {
+          const errMsg = batchError instanceof Error ? batchError.message : String(batchError);
           await execute(`ROLLBACK TO SAVEPOINT ${savepointName}`).catch(() => {});
           await execute(`RELEASE SAVEPOINT ${savepointName}`).catch(() => {});
-          console.error(`[SyncEngine] Summary batch failed at offset ${batchStart}:`, batchError);
+          console.error(`[SyncEngine] Summary batch failed at offset ${batchStart} (${computedSummaries.length} rows): ${errMsg}`);
         }
       }
 
